@@ -1,0 +1,9 @@
+pandas
+pandas_ta
+websockets
+dash
+dash-bootstrap-components
+plotly
+sqlalchemy
+python-dotenv
+numpy

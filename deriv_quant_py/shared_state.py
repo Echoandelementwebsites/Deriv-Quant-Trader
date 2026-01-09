@@ -1,0 +1,93 @@
+from threading import Lock
+
+class SharedState:
+    _instance = None
+    _lock = Lock()
+
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(SharedState, cls).__new__(cls)
+                cls._instance._init_data()
+            return cls._instance
+
+    def _init_data(self):
+        self.scanner_data = {} # {Category: [Assets]}
+        self.latest_candles = {} # {Symbol: ClosePrice}
+        self.candles_history = {} # {Symbol: [Candles]}
+        self.current_spreads = {} # {Symbol: Spread}
+        self.backtest_request = None # {symbol: str}
+        self.backtest_result = None # DataFrame or Dict
+        self.system_status = {
+            "trading_active": False,
+            "risk_multiplier": 2.1,
+            "daily_loss_limit": 50.0
+        }
+        self.connection_status = False
+        self.balance = 0.0
+
+    def update_scanner(self, data):
+        with self._lock:
+            self.scanner_data = data
+
+    def update_spread(self, symbol, spread):
+        with self._lock:
+            self.current_spreads[symbol] = spread
+
+    def get_spread(self, symbol):
+        with self._lock:
+            return self.current_spreads.get(symbol, 0.0)
+
+    def update_candle(self, symbol, price):
+        with self._lock:
+            self.latest_candles[symbol] = price
+
+    def update_history(self, symbol, candles):
+        with self._lock:
+            self.candles_history[symbol] = list(candles) # copy
+
+    def get_history(self, symbol):
+        with self._lock:
+            return self.candles_history.get(symbol, [])
+
+    def set_backtest_request(self, symbol):
+        with self._lock:
+            self.backtest_request = symbol
+            self.backtest_result = None
+
+    def get_backtest_request(self):
+        with self._lock:
+            req = self.backtest_request
+            self.backtest_request = None
+            return req
+
+    def set_backtest_result(self, result):
+        with self._lock:
+            self.backtest_result = result
+
+    def get_backtest_result(self):
+        with self._lock:
+            return self.backtest_result
+
+    def set_trading_active(self, active: bool):
+        with self._lock:
+            self.system_status["trading_active"] = active
+
+    def set_risk_settings(self, multiplier, limit):
+        with self._lock:
+            self.system_status["risk_multiplier"] = float(multiplier)
+            self.system_status["daily_loss_limit"] = float(limit)
+
+    def get_scanner_data(self):
+        with self._lock:
+            return self.scanner_data.copy()
+
+    def is_trading_active(self):
+        with self._lock:
+            return self.system_status["trading_active"]
+
+    def get_risk_settings(self):
+        with self._lock:
+            return self.system_status.copy()
+
+state = SharedState()
