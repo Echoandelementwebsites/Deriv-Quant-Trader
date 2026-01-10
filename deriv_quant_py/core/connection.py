@@ -18,7 +18,22 @@ class DerivClient:
         self.subscriptions: Dict[str, Callable] = {} # subscription_id -> callback
         self.msg_handlers: list[Callable] = [] # General message handlers
 
+        self._connected_event = asyncio.Event()
+        self._reconnection_task: Optional[asyncio.Task] = None
+
     async def connect(self):
+        """
+        Starts the connection maintenance task and waits for the initial
+        connection and authorization to complete.
+        """
+        if self._reconnection_task is None:
+            self._reconnection_task = asyncio.create_task(self._maintain_connection())
+
+        logger.info("Waiting for initial connection and authorization...")
+        await self._connected_event.wait()
+        logger.info("Initial connection established.")
+
+    async def _maintain_connection(self):
         """Establishes the WebSocket connection and handles reconnection."""
         while True:
             try:
@@ -28,27 +43,51 @@ class DerivClient:
                     self.is_connected = True
                     logger.info("Connected to Deriv API.")
 
-                    # Authenticate immediately
-                    if self.token:
-                        await self.authorize()
+                    # Start Message Loop (CRITICAL: Must start before authorize)
+                    read_task = asyncio.create_task(self._read_loop())
 
                     # Start Ping Loop
                     ping_task = asyncio.create_task(self._ping_loop())
 
-                    # Message Loop
                     try:
-                        async for message in ws:
-                            await self._handle_message(message)
-                    except websockets.ConnectionClosed as e:
-                        logger.warning(f"Connection closed: {e}")
+                        # Authenticate
+                        if self.token:
+                            await self.authorize()
+
+                        # Signal that we are connected and (attempted to) authorize
+                        self._connected_event.set()
+
+                        # Wait for the read loop to finish (connection closed)
+                        await read_task
+
+                    except Exception as e:
+                        logger.error(f"Error during connection session: {e}")
+                        # Ensure we cancel the read loop if it's still running (though unlikely if ws closed)
+                        if not read_task.done():
+                            read_task.cancel()
+                        raise # Re-raise to trigger reconnection in outer loop
+
                     finally:
                         self.is_connected = False
+                        self._connected_event.clear()
                         ping_task.cancel()
+                        if not read_task.done():
+                             read_task.cancel()
 
             except Exception as e:
                 logger.error(f"Connection error: {e}")
                 self.is_connected = False
                 await asyncio.sleep(5) # Backoff before reconnect
+
+    async def _read_loop(self):
+        """Reads messages from the websocket."""
+        try:
+            async for message in self.ws:
+                await self._handle_message(message)
+        except websockets.ConnectionClosed:
+            logger.warning("Websocket connection closed.")
+        except Exception as e:
+            logger.error(f"Error in read loop: {e}")
 
     async def _ping_loop(self):
         """Sends a ping every 20 seconds to keep connection alive."""
@@ -94,18 +133,6 @@ class DerivClient:
     async def subscribe(self, req: Dict[str, Any], callback: Callable):
         """Sends a subscription request and registers a callback."""
         req["subscribe"] = 1
-        # We don't await the response here in the same way, but we could.
-        # For simplicity, we send and let the generic handler route it?
-        # Better: Send request, get 'subscription' field in response, map ID to callback.
-
-        # NOTE: Deriv API returns the initial response with `req_id`, then updates with `subscription`.
-        # However, the updates don't have `req_id`. They have `msg_type` or specific keys.
-        # We need a way to route specific stream updates.
-
-        # Strategy: Map stream type (e.g., 'tick', 'proposal_open_contract') to callback?
-        # Or just append to general handlers and let the handler filter?
-        # Let's use general handlers for now, but specialized routing is better.
-
         self.msg_handlers.append(callback)
         await self.ws.send(json.dumps(req))
 
