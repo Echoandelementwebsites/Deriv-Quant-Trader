@@ -1,4 +1,5 @@
 pandas
+TA-Lib
 pandas_ta
 websockets
 dash

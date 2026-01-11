@@ -22,19 +22,35 @@ def detect_patterns(opens: pd.Series, highs: pd.Series, lows: pd.Series, closes:
     # pandas_ta cdls patterns return 0 (no pattern), 100 (bull), -100 (bear)
 
     # Bullish Engulfing
-    engulfing = ta.cdl_engulfing(opens, highs, lows, closes)
+    engulfing = ta.cdl_pattern(opens, highs, lows, closes, name="engulfing")
     # Hammer
-    hammer = ta.cdl_hammer(opens, highs, lows, closes)
+    hammer = ta.cdl_pattern(opens, highs, lows, closes, name="hammer")
     # 3 Black Crows (Bear)
-    crows = ta.cdl_3blackcrows(opens, highs, lows, closes)
+    crows = ta.cdl_pattern(opens, highs, lows, closes, name="3blackcrows")
 
     # Check last value
     last_idx = closes.index[-1]
 
-    is_bull_engulfing = engulfing.loc[last_idx] > 0 if engulfing is not None else False
-    is_hammer = hammer.loc[last_idx] > 0 if hammer is not None else False
-    is_bear_engulfing = engulfing.loc[last_idx] < 0 if engulfing is not None else False
-    is_crows = crows.loc[last_idx] < 0 if crows is not None else False
+    # Handle DataFrame return from cdl_pattern
+    if engulfing is not None and not engulfing.empty:
+        engulfing_val = engulfing['CDL_ENGULFING'].loc[last_idx]
+    else:
+        engulfing_val = 0
+
+    if hammer is not None and not hammer.empty:
+        hammer_val = hammer['CDL_HAMMER'].loc[last_idx]
+    else:
+        hammer_val = 0
+
+    if crows is not None and not crows.empty:
+        crows_val = crows['CDL_3BLACKCROWS'].loc[last_idx]
+    else:
+        crows_val = 0
+
+    is_bull_engulfing = engulfing_val > 0
+    is_hammer = hammer_val > 0
+    is_bear_engulfing = engulfing_val < 0
+    is_crows = crows_val < 0
 
     if is_bull_engulfing or is_hammer:
         return 'BULL'

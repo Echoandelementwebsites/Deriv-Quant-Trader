@@ -1,0 +1,6 @@
+Engulfing result type: <class 'pandas.core.frame.DataFrame'>
+Engulfing columns: ['CDL_ENGULFING']
+Hammer result type: <class 'pandas.core.frame.DataFrame'>
+Hammer columns: ['CDL_HAMMER']
+3blackcrows result type: <class 'pandas.core.frame.DataFrame'>
+3blackcrows columns: ['CDL_3BLACKCROWS']

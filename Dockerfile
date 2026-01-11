@@ -14,7 +14,19 @@ ENV PYTHONPATH=/app
 # Install system dependencies (needed for some python packages or build tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    build-essential \
+    wget \
     && rm -rf /var/lib/apt/lists/*
+
+# Install TA-Lib C library
+RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
+    tar -xzf ta-lib-0.4.0-src.tar.gz && \
+    cd ta-lib && \
+    ./configure --prefix=/usr && \
+    make && \
+    make install && \
+    cd .. && \
+    rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
 # Copy the requirements file into the container
 COPY deriv_quant_py/requirements.txt .
