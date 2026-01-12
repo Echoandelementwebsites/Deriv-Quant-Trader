@@ -138,11 +138,18 @@ class DerivClient:
 
 
     async def _handle_message(self, message: str):
-        data = json.loads(message)
+        try:
+            data = json.loads(message)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to decode message: {e}")
+            return
+
+        if not data:
+            return
 
         # 1. Handle Request Responses
         req_id = data.get("req_id")
-        if req_id in self.pending_requests:
+        if req_id and req_id in self.pending_requests:
             if not self.pending_requests[req_id].done():
                 self.pending_requests[req_id].set_result(data)
             del self.pending_requests[req_id]
