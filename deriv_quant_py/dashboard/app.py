@@ -21,7 +21,6 @@ app.layout = html.Div([
     dcc.Store(id='selected-symbol', data='R_100'), # Default
     dcc.Store(id='view-mode', data='single'), # 'single' or 'grid'
     dcc.Store(id='grid-page', data=0),
-    dcc.Store(id='ui-visible-symbols', data=['R_100']), # Init
 
     create_sidebar(),
 
@@ -69,7 +68,10 @@ def dashboard_layout():
                             ],
                             className="mb-2 justify-content-between"
                         ),
-                        html.Div(id="charts-container")
+                        html.Div([
+                            create_chart_area(),
+                            html.Div(id="grid-view-container", style={"display": "none"})
+                        ])
                     ],
                     width=9
                 ),
@@ -290,72 +292,71 @@ def update_selected_symbol(n_clicks, current):
         return current
 
 @app.callback(
-    Output("ui-visible-symbols", "data"),
-    Input("charts-container", "children"),
-    State("view-mode", "data")
+    Output("live-chart", "figure"),
+    Output("live-chart-header", "children"),
+    Output("live-chart-card", "style"),
+    Input("interval-fast", "n_intervals"),
+    Input("selected-symbol", "data"),
+    Input("view-mode", "data"),
+    prevent_initial_call=True
 )
-def dummy_sub_update(n, mode):
-    return no_update
+def update_single_chart_view(n, selected_symbol, mode):
+    if mode != "single":
+        return no_update, no_update, {"display": "none"}
+
+    fig = generate_chart(selected_symbol)
+    state.set_ui_visible_symbols([selected_symbol])
+    return fig, f"Live Chart: {selected_symbol}", {"display": "block"}
 
 
 @app.callback(
-    Output("charts-container", "children"),
-    Output("ui-visible-symbols", "data", allow_duplicate=True),
+    Output("grid-view-container", "children"),
+    Output("grid-view-container", "style"),
     Input("interval-fast", "n_intervals"),
-    Input("view-mode", "data"),
     Input("grid-page", "data"),
-    Input("selected-symbol", "data"),
+    Input("view-mode", "data"),
     prevent_initial_call=True
 )
-def update_charts_container(n, mode, page, selected_symbol):
-    if mode == "single":
-        fig = generate_chart(selected_symbol)
-        content = dbc.Card(
-            [dbc.CardHeader(f"Live Chart: {selected_symbol}"), dbc.CardBody(dcc.Graph(figure=fig))],
-            color="dark", inverse=True
-        )
-        # Notify backend
-        state.set_ui_visible_symbols([selected_symbol])
-        return content, [selected_symbol]
+def update_grid_view_content(n, page, mode):
+    if mode != "grid":
+        return no_update, {"display": "none"}
 
-    else: # Grid
-        # Get all symbols
-        scanner = state.get_scanner_data()
-        all_symbols = []
-        for cat, assets in scanner.items():
-            for a in assets:
-                all_symbols.append(a['symbol'])
+    # Get all symbols
+    scanner = state.get_scanner_data()
+    all_symbols = []
+    for cat, assets in scanner.items():
+        for a in assets:
+            all_symbols.append(a['symbol'])
 
-        # Pagination
-        start = page * 4
-        end = start + 4
-        visible_subset = all_symbols[start:end]
+    # Pagination
+    start = page * 4
+    end = start + 4
+    visible_subset = all_symbols[start:end]
 
-        if not visible_subset:
-            return html.Div("No assets found on this page."), []
+    if not visible_subset:
+        return html.Div("No assets found on this page."), {"display": "block"}
 
-        graphs = []
-        rows = []
+    rows = []
 
-        # 2x2 Grid using Bootstrap Rows/Cols
+    # 2x2 Grid using Bootstrap Rows/Cols
 
-        # Row 1
-        row1_cols = []
-        for sym in visible_subset[:2]:
-            fig = generate_chart(sym, height=350)
-            row1_cols.append(dbc.Col(dcc.Graph(figure=fig), width=6))
-        rows.append(dbc.Row(row1_cols, className="mb-2"))
+    # Row 1
+    row1_cols = []
+    for sym in visible_subset[:2]:
+        fig = generate_chart(sym, height=350)
+        row1_cols.append(dbc.Col(dcc.Graph(figure=fig), width=6))
+    rows.append(dbc.Row(row1_cols, className="mb-2"))
 
-        # Row 2
-        row2_cols = []
-        for sym in visible_subset[2:4]:
-            fig = generate_chart(sym, height=350)
-            row2_cols.append(dbc.Col(dcc.Graph(figure=fig), width=6))
-        rows.append(dbc.Row(row2_cols))
+    # Row 2
+    row2_cols = []
+    for sym in visible_subset[2:4]:
+        fig = generate_chart(sym, height=350)
+        row2_cols.append(dbc.Col(dcc.Graph(figure=fig), width=6))
+    rows.append(dbc.Row(row2_cols))
 
-        # Notify backend
-        state.set_ui_visible_symbols(visible_subset)
-        return html.Div(rows), visible_subset
+    # Notify backend
+    state.set_ui_visible_symbols(visible_subset)
+    return html.Div(rows), {"display": "block"}
 
 def generate_chart(symbol, height=600):
     history = state.get_history(symbol)
