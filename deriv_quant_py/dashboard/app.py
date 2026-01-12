@@ -1,4 +1,4 @@
-from dash import Dash, html, dcc, Output, Input, State, no_update
+from dash import Dash, html, dcc, Output, Input, State, no_update, dash_table
 import dash
 import dash_bootstrap_components as dbc
 from deriv_quant_py.dashboard.components import create_sidebar, create_top_bar, create_market_grid, create_chart_area, create_logs_area
@@ -7,6 +7,7 @@ from deriv_quant_py.config import Config
 from deriv_quant_py.shared_state import state
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 from sqlalchemy.orm import Session
 import json
 
@@ -98,13 +99,18 @@ def backtest_layout():
             ], width=3)
         ], className="mb-3"),
         dcc.Loading(
-            dcc.Graph(id="bt-heatmap")
+            html.Div([
+                dcc.Graph(id="bt-chart"),
+                html.Hr(),
+                html.H4("Detailed Results"),
+                html.Div(id="bt-table-container")
+            ])
         )
     ])
 
 # Callbacks for Backtest
 @app.callback(
-    Output("bt-heatmap", "figure"),
+    Output("bt-chart", "figure"),
     Input("bt-run-btn", "n_clicks"),
     State("bt-symbol", "value")
 )
@@ -115,26 +121,64 @@ def run_backtest_callback(n, symbol):
     # 1. Send Request to Backend
     state.set_backtest_request(symbol)
 
-    return go.Figure(layout={'title': 'Request Sent... Waiting for result'})
+    return go.Figure(layout={'title': 'Request Sent... Waiting for result', 'template': 'plotly_dark'})
 
 @app.callback(
-    Output("bt-heatmap", "figure", allow_duplicate=True),
+    Output("bt-chart", "figure", allow_duplicate=True),
+    Output("bt-table-container", "children"),
     Input("interval-fast", "n_intervals"),
     prevent_initial_call=True
 )
 def check_backtest_result(n):
     res = state.get_backtest_result()
-    if res:
-        # Build Heatmap
-        import pandas as pd
-        import plotly.express as px
-        df = pd.DataFrame(res)
-        pivot = df.pivot(index='EMA', columns='RSI', values='WinRate')
-        fig = px.imshow(pivot,
-                        labels=dict(x="RSI Period", y="EMA Period", color="Win Rate (%)"),
-                        title="Backtest Grid Search Results")
-        return fig
-    return no_update
+    if res is not None:
+        # Build DataFrame
+        if isinstance(res, list):
+            df = pd.DataFrame(res)
+        elif isinstance(res, pd.DataFrame):
+            df = res
+        else:
+            return no_update, no_update
+
+        if df.empty:
+             return go.Figure(layout={'title': 'No Data', 'template': 'plotly_dark'}), "No results found."
+
+        # Prepare for Bar Chart
+        # X-axis Label: RSI:X EMA:Y
+        df['Label'] = df.apply(lambda row: f"RSI:{row['RSI']} EMA:{row['EMA']}", axis=1)
+
+        # Bar Chart
+        fig = px.bar(df, x='Label', y='WinRate',
+                     text='WinRate',
+                     title="Backtest Grid Search Results (Win Rate %)",
+                     template="plotly_dark")
+        fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+        fig.update_layout(yaxis_range=[0, 100])
+
+        # Data Table
+        # Round WinRate for display
+        df_display = df[['RSI', 'EMA', 'Signals', 'WinRate']].copy()
+        df_display['WinRate'] = df_display['WinRate'].round(2)
+
+        table = dash_table.DataTable(
+            data=df_display.to_dict('records'),
+            columns=[{'name': i, 'id': i} for i in df_display.columns],
+            style_header={
+                'backgroundColor': 'rgb(30, 30, 30)',
+                'color': 'white'
+            },
+            style_data={
+                'backgroundColor': 'rgb(50, 50, 50)',
+                'color': 'white'
+            },
+            style_cell={
+                'textAlign': 'left',
+                'padding': '10px'
+            }
+        )
+
+        return fig, table
+    return no_update, no_update
 
 @app.callback(Output('page-content', 'children'),
               [Input('url', 'pathname')])
