@@ -63,12 +63,13 @@ def create_market_grid():
 def create_chart_area():
     return dbc.Card(
         [
-            dbc.CardHeader("Live Chart"),
+            dbc.CardHeader("Live Chart", id="live-chart-header"),
             dbc.CardBody(
                 dcc.Graph(id="live-chart")
             )
         ],
-        color="dark", inverse=True
+        color="dark", inverse=True,
+        id="live-chart-card"
     )
 
 def create_logs_area():
