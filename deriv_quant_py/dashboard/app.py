@@ -13,7 +13,7 @@ import json
 # Initialize DB connection for the frontend
 SessionLocal = init_db(Config.DB_PATH)
 
-app = Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
+app = Dash(__name__, external_stylesheets=[dbc.themes.DARKLY], suppress_callback_exceptions=True)
 
 app.layout = html.Div([
     dcc.Interval(id="interval-fast", interval=3000, n_intervals=0), # 3s updates for robustness
@@ -21,6 +21,7 @@ app.layout = html.Div([
     dcc.Store(id='selected-symbol', data='R_100'), # Default
     dcc.Store(id='view-mode', data='single'), # 'single' or 'grid'
     dcc.Store(id='grid-page', data=0),
+    dcc.Store(id='scanner-state'), # Persist scanner accordion state
 
     create_sidebar(),
 
@@ -161,10 +162,19 @@ def update_logs(n):
         session.close()
 
 @app.callback(
-    Output("scanner-content", "children"),
-    Input("interval-fast", "n_intervals")
+    Output("scanner-state", "data"),
+    Input("market-scanner-accordion", "active_item"),
+    prevent_initial_call=True
 )
-def update_scanner(n):
+def save_scanner_state(active_item):
+    return active_item
+
+@app.callback(
+    Output("scanner-content", "children"),
+    Input("interval-fast", "n_intervals"),
+    State("scanner-state", "data")
+)
+def update_scanner(n, saved_active_item):
     data = state.get_scanner_data()
     active_trades = state.get_active_trades()
 
@@ -201,12 +211,19 @@ def update_scanner(n):
         accordion_items.append(
             dbc.AccordionItem(
                 dbc.ListGroup(list_items, flush=True),
-                title=cat
+                title=cat,
+                item_id=cat  # Explicit ID for persistence
             )
         )
 
     return html.Div(
-        dbc.Accordion(accordion_items, start_collapsed=False, flush=True),
+        dbc.Accordion(
+            accordion_items,
+            id="market-scanner-accordion",
+            start_collapsed=False,
+            flush=True,
+            active_item=saved_active_item
+        ),
         style={"maxHeight": "80vh", "overflowY": "scroll"}
     )
 
@@ -284,7 +301,12 @@ def update_selected_symbol(n_clicks, current):
         return current
 
     # Check which was clicked
-    trig_id_str = ctx.triggered[0]['prop_id'].split('.')[0]
+    trig = ctx.triggered[0]
+    # Ignore triggers with falsy values (e.g. initialization/reset to None)
+    if not trig['value']:
+        return current
+
+    trig_id_str = trig['prop_id'].split('.')[0]
     try:
         trig_obj = json.loads(trig_id_str)
         return trig_obj['index']
