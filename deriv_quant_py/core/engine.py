@@ -20,16 +20,38 @@ class TradingEngine:
         # Store candles: {symbol: deque([candles], maxlen=300)}
         self.candles = {}
         self.running = False
-        self.watched_symbols = []
+        self.watchlist = set() # Symbols we trade
+        self.subscribed_symbols = set() # All active subscriptions (Watchlist + UI)
 
     def start(self, symbols):
-        self.watched_symbols = symbols
+        self.watchlist = set(symbols)
         self.running = True
-        # Subscribe to ticks/candles
-        for symbol in symbols:
-            self.candles[symbol] = deque(maxlen=Config.EMA_PERIOD + 20)
+
+        # Start background subscription manager
+        asyncio.create_task(self._subscription_manager())
+
+    async def _subscription_manager(self):
+        while self.running:
+            await self.update_subscriptions()
+            await asyncio.sleep(2) # Poll every 2 seconds
+
+    async def update_subscriptions(self):
+        ui_symbols = state.get_ui_visible_symbols()
+        target_symbols = self.watchlist.union(ui_symbols)
+
+        # Identify new symbols to subscribe
+        new_symbols = target_symbols - self.subscribed_symbols
+
+        for symbol in new_symbols:
+            logger.info(f"Subscribing to {symbol}")
+            self.subscribed_symbols.add(symbol)
+            if symbol not in self.candles:
+                self.candles[symbol] = deque(maxlen=Config.EMA_PERIOD + 20)
+
             asyncio.create_task(self._subscribe_candles(symbol))
             asyncio.create_task(self._subscribe_ticks(symbol))
+
+        # Optional: Unsubscribe? For now, we keep them active.
 
     async def _subscribe_ticks(self, symbol):
         """Subscribes to ticks for spread calculation."""
@@ -128,9 +150,6 @@ class TradingEngine:
              state.update_candle(symbol, result['price'])
 
         # Check Spread Filter (e.g., if spread > 0.1% of price? Or simple absolute check?)
-        # Let's use a simple config threshold or relative.
-        # User requested: "Spread Filter: Do not trade if spread is too wide".
-        # We'll check if spread is available and reasonably low.
         spread = state.get_spread(symbol)
         price = result['price'] if result else 0
 
@@ -156,6 +175,11 @@ class TradingEngine:
 
             # Execute Trade (Check master switch first)
             if state.is_trading_active():
+                # Only execute trade if in Watchlist (Trading List)
+                if symbol not in self.watchlist:
+                    logger.debug(f"Signal ignored (Not in Watchlist): {symbol}")
+                    return
+
                 # Find symbol info from shared state
                 scanner_data = state.get_scanner_data()
                 symbol_info = {}

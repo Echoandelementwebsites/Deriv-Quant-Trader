@@ -16,6 +16,8 @@ class SharedState:
         self.latest_candles = {} # {Symbol: ClosePrice}
         self.candles_history = {} # {Symbol: [Candles]}
         self.current_spreads = {} # {Symbol: Spread}
+        self.active_trade_symbols = set() # {Symbol}
+        self.ui_visible_symbols = set() # {Symbol}
         self.backtest_request = None # {symbol: str}
         self.backtest_result = None # DataFrame or Dict
         self.system_status = {
@@ -25,6 +27,26 @@ class SharedState:
         }
         self.connection_status = False
         self.balance = 0.0
+
+    def add_active_trade(self, symbol):
+        with self._lock:
+            self.active_trade_symbols.add(symbol)
+
+    def remove_active_trade(self, symbol):
+        with self._lock:
+            self.active_trade_symbols.discard(symbol)
+
+    def get_active_trades(self):
+        with self._lock:
+            return self.active_trade_symbols.copy()
+
+    def set_ui_visible_symbols(self, symbols: list):
+        with self._lock:
+            self.ui_visible_symbols = set(symbols)
+
+    def get_ui_visible_symbols(self):
+        with self._lock:
+            return self.ui_visible_symbols.copy()
 
     def update_scanner(self, data):
         with self._lock:

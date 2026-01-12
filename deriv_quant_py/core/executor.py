@@ -5,6 +5,7 @@ from datetime import datetime
 from deriv_quant_py.config import Config
 from deriv_quant_py.core.connection import DerivClient
 from deriv_quant_py.database import Trade
+from deriv_quant_py.shared_state import state
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -17,6 +18,15 @@ class TradeExecutor:
         self.daily_loss = 0.0
         self.risk_multiplier = Config.RISK_MULTIPLIER
         self.base_stake = 10.0 # Default, should come from config or UI
+
+        # Initialize Active Trades in SharedState
+        try:
+            open_trades = self.db.query(Trade).filter_by(status='OPEN').all()
+            for t in open_trades:
+                state.add_active_trade(t.symbol)
+            logger.info(f"Initialized active trades: {[t.symbol for t in open_trades]}")
+        except Exception as e:
+            logger.error(f"Error initializing active trades: {e}")
 
     async def execute_trade(self, signal_data: dict, symbol_info: dict):
         """
@@ -98,6 +108,7 @@ class TradeExecutor:
                 logger.info(f"Trade Executed: {buy_res['buy']['contract_id']} | {direction} | ${stake}")
                 # Log to DB
                 self._log_trade(buy_res['buy'], symbol, direction, stake)
+                state.add_active_trade(symbol)
 
         except Exception as e:
             logger.error(f"Execution Exception: {e}")
@@ -156,12 +167,6 @@ class TradeExecutor:
                     status = "WON" if profit > 0 else "LOST"
 
                     # Update DB
-                    # We need a new session or thread-safe way?
-                    # Use existing self.db but be careful of thread safety if this runs in parallel?
-                    # SQLAlchemy session is not thread safe.
-                    # But here everything is in the backend asyncio loop/thread. So it should be fine
-                    # as long as we don't share session across threads.
-
                     try:
                         trade = self.db.query(Trade).filter_by(contract_id=contract_id).first()
                         if trade and trade.status == 'OPEN':
@@ -170,6 +175,7 @@ class TradeExecutor:
                             trade.exit_time = datetime.utcnow()
                             self.db.commit()
                             logger.info(f"Trade Closed: {contract_id} | {status} | ${profit}")
+                            state.remove_active_trade(trade.symbol)
                     except Exception as e:
                         logger.error(f"Error updating trade {contract_id}: {e}")
                         self.db.rollback()
