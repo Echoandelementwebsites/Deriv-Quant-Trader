@@ -70,18 +70,17 @@ def run_backend():
                     # Ideally create_task, but run_full_scan is async.
                     asyncio.create_task(backtester.run_full_scan())
                 else:
-                    logger.info(f"Running Backtest for {bt_req}...")
-                    df = await backtester.fetch_history(bt_req)
+                    logger.info(f"Running WFA for {bt_req}...")
+                    df = await backtester.fetch_history_paginated(bt_req, months=1)
                     if not df.empty:
-                        res = backtester.run_grid_search(df)
-                        # Save Best automatically? Or just display?
-                        # User wants backtester to "add most successful combinations... to database"
-                        # Grid search returns list. We should probably find best and save it too?
-                        # Current requirement was "Test All... add to DB".
-                        # For single test, maybe just display.
-                        # But let's save best for single too for consistency if user wants.
-                        # For now, just display as before.
-                        state.set_backtest_result(res.to_dict('records'))
+                        # Single WFA run returns a single dict (best config) or None
+                        best = backtester.run_wfa_optimization(df)
+                        if best:
+                            # Frontend expects a list for the table/chart.
+                            # We can wrap the single result in a list.
+                            state.set_backtest_result([best])
+                        else:
+                            state.set_backtest_result([])
                     else:
                         state.set_backtest_result([])
 
