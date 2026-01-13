@@ -58,3 +58,12 @@ def detect_patterns(opens: pd.Series, highs: pd.Series, lows: pd.Series, closes:
         return 'BEAR'
 
     return None
+
+def calculate_chop(highs: pd.Series, lows: pd.Series, closes: pd.Series, length: int = 14):
+    """
+    Calculates the Choppiness Index (CHOP).
+    Values < 38 indicate a strong trend (Danger Zone for reversals).
+    Values > 61 indicate a choppy market (Ideal for reversals).
+    """
+    chop = ta.chop(highs, lows, closes, length=length)
+    return chop

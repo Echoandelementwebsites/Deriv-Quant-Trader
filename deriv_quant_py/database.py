@@ -34,6 +34,8 @@ class StrategyParams(Base):
     symbol = Column(String, primary_key=True)
     rsi_period = Column(Integer)
     ema_period = Column(Integer)
+    optimal_duration = Column(Integer, default=3)
+    rsi_vol_window = Column(Integer, default=100)
     win_rate = Column(Float)
     signal_count = Column(Integer)
     last_updated = Column(DateTime, default=datetime.utcnow)

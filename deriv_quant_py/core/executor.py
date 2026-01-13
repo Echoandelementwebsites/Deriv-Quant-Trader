@@ -50,8 +50,9 @@ class TradeExecutor:
         stake = self._calculate_stake(symbol)
 
         # 3. Calculate Duration & Validate
-        # Default 3m (3 * timeframe 1m)
-        duration = 3
+        # Fetch optimal duration from DB, default 3m
+        strategy_params = self.db.query(StrategyParams).filter_by(symbol=symbol).first()
+        duration = strategy_params.optimal_duration if strategy_params else 3
         duration_unit = 'm'
 
         if symbol_info:
