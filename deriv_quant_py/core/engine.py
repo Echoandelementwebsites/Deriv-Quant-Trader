@@ -150,7 +150,8 @@ class TradingEngine:
             if strategy_params:
                 params = {
                     'rsi_period': strategy_params.rsi_period,
-                    'ema_period': strategy_params.ema_period
+                    'ema_period': strategy_params.ema_period,
+                    'rsi_vol_window': strategy_params.rsi_vol_window
                 }
                 # logger.debug(f"Using custom params for {symbol}: {params}")
         except Exception as e:

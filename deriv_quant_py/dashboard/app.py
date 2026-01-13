@@ -206,21 +206,42 @@ def check_backtest_result(n):
              return go.Figure(layout={'title': 'No Data', 'template': 'plotly_dark'}), "No results found."
 
         # Prepare for Bar Chart
-        # X-axis Label: RSI:X EMA:Y
-        df['Label'] = df.apply(lambda row: f"RSI:{row['RSI']} EMA:{row['EMA']}", axis=1)
+        # Normalize columns if missing (backward compatibility)
+        if 'rsi_period' in df.columns: df.rename(columns={'rsi_period': 'RSI'}, inplace=True)
+        if 'ema_period' in df.columns: df.rename(columns={'ema_period': 'EMA'}, inplace=True)
 
-        # Bar Chart
-        fig = px.bar(df, x='Label', y='WinRate',
-                     text='WinRate',
-                     title="Backtest Grid Search Results (Win Rate %)",
+        # X-axis Label: RSI:X EMA:Y Dur:Z
+        df['Label'] = df.apply(lambda row: f"RSI:{row['RSI']} EMA:{row['EMA']} Dur:{row.get('optimal_duration', 3)}m", axis=1)
+
+        # Bar Chart (Expectancy)
+        # If Expectancy exists, use it. Else fall back to WinRate
+        y_col = 'Expectancy' if 'Expectancy' in df.columns else 'WinRate'
+        title = "WFA Results: Expectancy ($ per trade)" if 'Expectancy' in df.columns else "Backtest Results (Win Rate %)"
+
+        fig = px.bar(df, x='Label', y=y_col,
+                     text=y_col,
+                     title=title,
                      template="plotly_dark")
-        fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-        fig.update_layout(yaxis_range=[0, 100])
+
+        if y_col == 'Expectancy':
+             fig.update_traces(texttemplate='$%{text:.2f}', textposition='outside')
+             fig.update_layout(yaxis_title="Expectancy ($)")
+        else:
+             fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+             fig.update_layout(yaxis_range=[0, 100])
 
         # Data Table
-        # Round WinRate for display
-        df_display = df[['RSI', 'EMA', 'Signals', 'WinRate']].copy()
-        df_display['WinRate'] = df_display['WinRate'].round(2)
+        # Select relevant columns
+        cols = ['RSI', 'EMA', 'Signals', 'WinRate']
+        if 'optimal_duration' in df.columns: cols.append('optimal_duration')
+        if 'rsi_vol_window' in df.columns: cols.append('rsi_vol_window')
+        if 'Expectancy' in df.columns: cols.append('Expectancy')
+
+        df_display = df[cols].copy()
+
+        # Rounding
+        if 'WinRate' in df_display.columns: df_display['WinRate'] = df_display['WinRate'].round(2)
+        if 'Expectancy' in df_display.columns: df_display['Expectancy'] = df_display['Expectancy'].round(3)
 
         table = dash_table.DataTable(
             data=df_display.to_dict('records'),
