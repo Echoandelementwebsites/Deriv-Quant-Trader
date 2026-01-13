@@ -20,6 +20,12 @@ class SharedState:
         self.ui_visible_symbols = set() # {Symbol}
         self.backtest_request = None # {symbol: str}
         self.backtest_result = None # DataFrame or Dict
+        self.scan_progress = {
+            "total": 0,
+            "current": 0,
+            "current_symbol": None,
+            "status": "idle" # idle, running, complete
+        }
         self.system_status = {
             "trading_active": False,
             "risk_multiplier": 2.1,
@@ -90,6 +96,19 @@ class SharedState:
     def get_backtest_result(self):
         with self._lock:
             return self.backtest_result
+
+    def update_scan_progress(self, total, current, symbol, status="running"):
+        with self._lock:
+            self.scan_progress = {
+                "total": total,
+                "current": current,
+                "current_symbol": symbol,
+                "status": status
+            }
+
+    def get_scan_progress(self):
+        with self._lock:
+            return self.scan_progress.copy()
 
     def set_trading_active(self, active: bool):
         with self._lock:

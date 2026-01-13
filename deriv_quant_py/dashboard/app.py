@@ -92,12 +92,18 @@ def backtest_layout():
         html.H3("Backtesting Module"),
         dbc.Row([
             dbc.Col([
-                dbc.Input(id="bt-symbol", placeholder="Symbol (e.g. R_100)", value="R_100"),
+                dcc.Dropdown(id="bt-symbol", placeholder="Select Symbol", style={'color': 'black'}),
             ], width=3),
             dbc.Col([
-                 dbc.Button("Run Grid Search", id="bt-run-btn", color="primary")
-            ], width=3)
+                 dbc.Button("Run Grid Search", id="bt-run-btn", color="primary", className="me-2"),
+                 dbc.Button("Run Full System Scan", id="bt-scan-btn", color="danger"),
+            ], width=6)
         ], className="mb-3"),
+
+        # Scan Progress Bar
+        dbc.Progress(id="scan-progress", value=0, label="", striped=True, animated=True, style={"height": "20px", "display": "none"}),
+        html.Div(id="scan-status-text", className="mb-3 text-warning"),
+
         dcc.Loading(
             html.Div([
                 dcc.Graph(id="bt-chart"),
@@ -109,19 +115,75 @@ def backtest_layout():
     ])
 
 # Callbacks for Backtest
+
+@app.callback(
+    Output("bt-symbol", "options"),
+    Input("interval-slow", "n_intervals")
+)
+def update_bt_symbol_options(n):
+    data = state.get_scanner_data()
+    options = []
+    for cat, assets in data.items():
+        for a in assets:
+            options.append({'label': f"{a['symbol']} - {a.get('name')}", 'value': a['symbol']})
+    return options
+
 @app.callback(
     Output("bt-chart", "figure"),
+    Output("scan-progress", "style", allow_duplicate=True),
+    Output("scan-status-text", "children", allow_duplicate=True),
     Input("bt-run-btn", "n_clicks"),
-    State("bt-symbol", "value")
+    Input("bt-scan-btn", "n_clicks"),
+    State("bt-symbol", "value"),
+    prevent_initial_call=True
 )
-def run_backtest_callback(n, symbol):
-    if not n or not symbol:
-        return go.Figure()
+def run_backtest_actions(n_grid, n_scan, symbol):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return no_update, no_update, no_update
 
-    # 1. Send Request to Backend
-    state.set_backtest_request(symbol)
+    trig_id = ctx.triggered[0]['prop_id']
 
-    return go.Figure(layout={'title': 'Request Sent... Waiting for result', 'template': 'plotly_dark'})
+    if "bt-run-btn" in trig_id:
+        if not symbol:
+             return go.Figure(layout={'title': 'Please select a symbol', 'template': 'plotly_dark'}), no_update, no_update
+        # Send Request to Backend
+        state.set_backtest_request(symbol)
+        return go.Figure(layout={'title': 'Request Sent... Waiting for result', 'template': 'plotly_dark'}), {"display": "none"}, ""
+
+    elif "bt-scan-btn" in trig_id:
+        # Trigger Full Scan
+        state.set_backtest_request("FULL_SCAN")
+        return go.Figure(layout={'title': 'Full System Scan Initiated...', 'template': 'plotly_dark'}), {"display": "flex", "height": "20px"}, "Starting Scan..."
+
+    return no_update, no_update, no_update
+
+@app.callback(
+    Output("scan-progress", "value"),
+    Output("scan-progress", "label"),
+    Output("scan-status-text", "children"),
+    Output("scan-progress", "style"),
+    Input("interval-fast", "n_intervals"),
+    prevent_initial_call=True
+)
+def update_scan_progress_bar(n):
+    progress = state.get_scan_progress()
+    if progress['status'] == 'idle':
+        return 0, "", "", {"display": "none"}
+
+    total = progress['total']
+    current = progress['current']
+    symbol = progress['current_symbol']
+    status = progress['status']
+
+    percent = (current / total * 100) if total > 0 else 0
+
+    if status == 'complete':
+        return 100, "100%", "Scan Complete!", {"display": "flex", "height": "20px"}
+
+    label = f"{int(percent)}%"
+    text = f"Scanning {symbol}... ({current}/{total})"
+    return percent, label, text, {"display": "flex", "height": "20px"}
 
 @app.callback(
     Output("bt-chart", "figure", allow_duplicate=True),

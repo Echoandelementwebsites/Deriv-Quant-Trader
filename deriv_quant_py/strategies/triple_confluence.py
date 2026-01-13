@@ -10,12 +10,17 @@ class TripleConfluenceStrategy:
         self.rsi_os = Config.RSI_OS
         self.adx_threshold = Config.ADX_THRESHOLD
 
-    def analyze(self, candles: list):
+    def analyze(self, candles: list, params: dict = None):
         """
         Analyzes a list of candles to produce a signal.
         candles: list of dicts {open, high, low, close, epoch}
+        params: dict (optional) overrides for 'rsi_period', 'ema_period'
         """
-        if len(candles) < self.ema_period + 5:
+        # Determine periods
+        ema_p = params.get('ema_period', self.ema_period) if params else self.ema_period
+        rsi_p = params.get('rsi_period', self.rsi_period) if params else self.rsi_period
+
+        if len(candles) < ema_p + 5:
             return None
 
         # Convert to DataFrame
@@ -26,8 +31,8 @@ class TripleConfluenceStrategy:
         df['low'] = df['low'].astype(float)
 
         # Calculate Indicators
-        ema = calculate_ema(df['close'], self.ema_period)
-        rsi = calculate_rsi(df['close'], self.rsi_period)
+        ema = calculate_ema(df['close'], ema_p)
+        rsi = calculate_rsi(df['close'], rsi_p)
         adx = calculate_adx(df['high'], df['low'], df['close'], 14)
 
         # Get values for the last closed candle (index -1)

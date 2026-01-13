@@ -29,6 +29,16 @@ class SignalLog(Base):
     price = Column(Float)
     indicators = Column(Text) # JSON blob {rsi: 50, ema: 100}
 
+class StrategyParams(Base):
+    __tablename__ = 'strategy_params'
+    symbol = Column(String, primary_key=True)
+    rsi_period = Column(Integer)
+    ema_period = Column(Integer)
+    win_rate = Column(Float)
+    signal_count = Column(Integer)
+    last_updated = Column(DateTime, default=datetime.utcnow)
+    details = Column(Text, nullable=True) # JSON blob for meta info
+
 def init_db(db_url):
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)

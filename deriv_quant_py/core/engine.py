@@ -4,7 +4,7 @@ from collections import deque
 from deriv_quant_py.config import Config
 from deriv_quant_py.core.connection import DerivClient
 from deriv_quant_py.strategies.triple_confluence import TripleConfluenceStrategy
-from deriv_quant_py.database import SignalLog
+from deriv_quant_py.database import SignalLog, StrategyParams
 from deriv_quant_py.shared_state import state
 from sqlalchemy.orm import Session
 import json
@@ -143,7 +143,20 @@ class TradingEngine:
         # Update shared state with latest history (for Chart)
         state.update_history(symbol, data)
 
-        result = self.strategy.analyze(data)
+        # Retrieve specific params from DB
+        params = None
+        try:
+            strategy_params = self.db.query(StrategyParams).filter_by(symbol=symbol).first()
+            if strategy_params:
+                params = {
+                    'rsi_period': strategy_params.rsi_period,
+                    'ema_period': strategy_params.ema_period
+                }
+                # logger.debug(f"Using custom params for {symbol}: {params}")
+        except Exception as e:
+            logger.error(f"Error fetching params for {symbol}: {e}")
+
+        result = self.strategy.analyze(data, params=params)
 
         # Update shared state with latest price
         if result:
