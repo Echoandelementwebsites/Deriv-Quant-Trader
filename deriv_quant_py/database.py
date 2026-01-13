@@ -44,4 +44,23 @@ class StrategyParams(Base):
 def init_db(db_url):
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
+
+    # Auto-migration for schema updates (SQLite)
+    # Check if new columns exist, if not, add them.
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+
+    if 'strategy_params' in inspector.get_table_names():
+        columns = [c['name'] for c in inspector.get_columns('strategy_params')]
+
+        with engine.connect() as conn:
+            if 'optimal_duration' not in columns:
+                conn.execute(text("ALTER TABLE strategy_params ADD COLUMN optimal_duration INTEGER DEFAULT 3"))
+
+            if 'rsi_vol_window' not in columns:
+                conn.execute(text("ALTER TABLE strategy_params ADD COLUMN rsi_vol_window INTEGER DEFAULT 100"))
+
+            if 'details' not in columns:
+                 conn.execute(text("ALTER TABLE strategy_params ADD COLUMN details TEXT"))
+
     return sessionmaker(bind=engine)
