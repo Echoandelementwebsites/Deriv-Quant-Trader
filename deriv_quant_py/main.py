@@ -61,16 +61,29 @@ def run_backend():
         # Keep alive Loop (Poll for Backtest Requests)
         while True:
             # Check for backtest request
-            bt_symbol = state.get_backtest_request()
-            if bt_symbol:
-                logger.info(f"Running Backtest for {bt_symbol}...")
-                df = await backtester.fetch_history(bt_symbol)
-                if not df.empty:
-                    res = backtester.run_grid_search(df)
-                    # Convert to dict for SharedState/Dash
-                    state.set_backtest_result(res.to_dict('records'))
+            bt_req = state.get_backtest_request()
+            if bt_req:
+                if bt_req == "FULL_SCAN":
+                    logger.info("Starting Full System Scan...")
+                    # Run in background to not block loop?
+                    # Since this is the main loop, we can await it, but it blocks engine updates for seconds/minutes.
+                    # Ideally create_task, but run_full_scan is async.
+                    asyncio.create_task(backtester.run_full_scan())
                 else:
-                    state.set_backtest_result([])
+                    logger.info(f"Running Backtest for {bt_req}...")
+                    df = await backtester.fetch_history(bt_req)
+                    if not df.empty:
+                        res = backtester.run_grid_search(df)
+                        # Save Best automatically? Or just display?
+                        # User wants backtester to "add most successful combinations... to database"
+                        # Grid search returns list. We should probably find best and save it too?
+                        # Current requirement was "Test All... add to DB".
+                        # For single test, maybe just display.
+                        # But let's save best for single too for consistency if user wants.
+                        # For now, just display as before.
+                        state.set_backtest_result(res.to_dict('records'))
+                    else:
+                        state.set_backtest_result([])
 
             await asyncio.sleep(1)
 
