@@ -11,7 +11,7 @@ class Config:
 
     # Trading
     TRADING_ACTIVE = os.getenv("TRADING_ACTIVE", "False").lower() == "true"
-    RISK_MULTIPLIER = float(os.getenv("RISK_MULTIPLIER", "2.1"))
+    RISK_PERCENTAGE = float(os.getenv("RISK_PERCENTAGE", "1.0"))
     DAILY_LOSS_LIMIT = float(os.getenv("DAILY_LOSS_LIMIT", "50.0"))
 
     # Strategy
