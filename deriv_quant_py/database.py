@@ -40,6 +40,8 @@ class StrategyParams(Base):
     signal_count = Column(Integer)
     last_updated = Column(DateTime, default=datetime.utcnow)
     details = Column(Text, nullable=True) # JSON blob for meta info
+    strategy_type = Column(String, nullable=True)  # REVERSAL, TREND, BREAKOUT
+    config_json = Column(Text, nullable=True)  # Strategy specific params
 
 def init_db(db_url):
     engine = create_engine(db_url)
@@ -62,5 +64,11 @@ def init_db(db_url):
 
             if 'details' not in columns:
                  conn.execute(text("ALTER TABLE strategy_params ADD COLUMN details TEXT"))
+
+            if 'strategy_type' not in columns:
+                conn.execute(text("ALTER TABLE strategy_params ADD COLUMN strategy_type VARCHAR"))
+
+            if 'config_json' not in columns:
+                conn.execute(text("ALTER TABLE strategy_params ADD COLUMN config_json TEXT"))
 
     return sessionmaker(bind=engine)

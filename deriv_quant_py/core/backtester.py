@@ -9,6 +9,7 @@ from deriv_quant_py.utils.indicators import calculate_chop
 import asyncio
 import logging
 import numpy as np
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -103,75 +104,93 @@ class Backtester:
         ev = (win_rate * avg_win_payout) - (loss_rate * 1.0)
         return ev
 
-    def _evaluate_strategy(self, df, rsi_p, ema_p, rsi_window, duration):
-        """
-        Vectorized evaluation of strategy on a dataframe.
-        Returns (wins, losses, signals_count)
-        """
-        # Calculate Indicators
-        # Using pandas_ta directly for speed
-        df = df.copy() # Avoid SettingWithCopy
+    def _eval_reversal(self, df, params):
+        # Params: rsi_period, ema_period, rsi_vol_window, duration
+        rsi_p = params['rsi_period']
+        ema_p = params['ema_period']
+        rsi_window = params['rsi_vol_window']
+        duration = params['duration']
 
         # EMA
         df['EMA'] = ta.ema(df['close'], length=ema_p)
-
         # RSI
         rsi_series = ta.rsi(df['close'], length=rsi_p)
         df['RSI'] = rsi_series
-
         # Dynamic Bands
         rsi_roll = rsi_series.rolling(window=rsi_window)
         rsi_mean = rsi_roll.mean()
         rsi_std = rsi_roll.std()
-
         df['Dyn_Upper'] = rsi_mean + (2 * rsi_std)
         df['Dyn_Lower'] = rsi_mean - (2 * rsi_std)
-
         # CHOP
         df['CHOP'] = calculate_chop(df['high'], df['low'], df['close'], length=14)
 
-        # Logic Vectors
-        # 1. Chop Filter
-        # Reject if CHOP < 38
-        # Allow if CHOP >= 38
         valid_regime = df['CHOP'] >= 38
-
-        # 2. Reversal Signals
-        # CALL
-        # Price > EMA (Trend)
-        # RSI < Dyn_Lower (Trigger)
-        # RSI < 45 (Safety)
-
-        # PUT
-        # Price < EMA
-        # RSI > Dyn_Upper
-        # RSI > 55
-
         call_signal = (
             valid_regime &
             (df['close'] > df['EMA']) &
             (df['RSI'] < df['Dyn_Lower']) &
             (df['RSI'] < 45)
         )
-
         put_signal = (
             valid_regime &
             (df['close'] < df['EMA']) &
             (df['RSI'] > df['Dyn_Upper']) &
             (df['RSI'] > 55)
         )
+        return self._calc_win_loss(df, call_signal, put_signal, duration)
 
-        # Evaluation
-        # We need to look ahead 'duration' candles
-        # Shift close price backward by duration to align 'future_close' with current row
+    def _eval_trend(self, df, params):
+        # Params: macd_fast, macd_slow, ema_period, duration
+        # Default signal length 9
+        fast = params['macd_fast']
+        slow = params['macd_slow']
+        ema_p = params['ema_period']
+        duration = params['duration']
+
+        macd_df = ta.macd(df['close'], fast=fast, slow=slow, signal=9)
+        # Columns: MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
+        # Names depend on params, so we select by index or robust naming
+        if macd_df is None or macd_df.empty:
+            return 0, 0, 0
+
+        macd_line = macd_df.iloc[:, 0]
+        signal_line = macd_df.iloc[:, 2]
+
+        df['EMA'] = ta.ema(df['close'], length=ema_p)
+
+        call_signal = (macd_line > signal_line) & (df['close'] > df['EMA'])
+        put_signal = (macd_line < signal_line) & (df['close'] < df['EMA'])
+
+        return self._calc_win_loss(df, call_signal, put_signal, duration)
+
+    def _eval_breakout(self, df, params):
+        # Params: bb_length, bb_std, duration
+        length = params['bb_length']
+        std = params['bb_std']
+        duration = params['duration']
+
+        bb = ta.bbands(df['close'], length=length, std=std)
+        if bb is None or bb.empty:
+             return 0, 0, 0
+
+        # Columns: BBL, BBM, BBU, BBB, BBP
+        lower = bb.iloc[:, 0]
+        upper = bb.iloc[:, 2]
+        # bandwidth = bb.iloc[:, 3] # Check width if needed (threshold)
+
+        # Simple breakout: Close outside bands
+        call_signal = df['close'] > upper
+        put_signal = df['close'] < lower
+
+        return self._calc_win_loss(df, call_signal, put_signal, duration)
+
+    def _calc_win_loss(self, df, call_signal, put_signal, duration):
         future_close = df['close'].shift(-duration)
 
-        # Wins/Losses
-        # Call Win: Future > Current
         call_wins = call_signal & (future_close > df['close'])
         call_losses = call_signal & (future_close <= df['close'])
 
-        # Put Win: Future < Current
         put_wins = put_signal & (future_close < df['close'])
         put_losses = put_signal & (future_close >= df['close'])
 
@@ -185,9 +204,7 @@ class Backtester:
         """
         Rolling Walk-Forward Analysis:
         Slide a training window over the data, test on the subsequent small window.
-        Train: 3000 candles
-        Test: 500 candles
-        Step: 500 candles
+        Iterate through Strategy Types -> Grids.
         """
         TRAIN_SIZE = 3000
         TEST_SIZE = 500
@@ -197,102 +214,113 @@ class Backtester:
             logger.info(f"Not enough data for Rolling WFA. Needed {TRAIN_SIZE+TEST_SIZE}, got {len(df)}")
             return None
 
-        # Search Space
-        rsi_periods = [7, 14]
-        ema_periods = [100, 200]
-        durations = [3, 5, 10, 15] # Minutes
-        rsi_vol_windows = [50, 100]
-
-        # Aggregate Results
-        # Key: (rsi, ema, vol, dur) -> {wins, losses, signals}
-        agg_results = {}
-
-        # Rolling Window Loop
-        for start_idx in range(0, len(df) - TRAIN_SIZE - TEST_SIZE, STEP_SIZE):
-            train_start = start_idx
-            train_end = start_idx + TRAIN_SIZE
-            test_start = train_end
-            test_end = train_end + TEST_SIZE
-
-            train_df = df.iloc[train_start:train_end]
-            test_df = df.iloc[test_start:test_end]
-
-            # 1. Optimize on Train Window
-            best_local_config = None
-            best_local_ev = -100
-
-            for rsi_p in rsi_periods:
-                for ema_p in ema_periods:
-                    for win in rsi_vol_windows:
-                        for dur in durations:
-                            wins, losses, signals = self._evaluate_strategy(train_df, rsi_p, ema_p, win, dur)
-                            if signals < 3: continue # Lower threshold for shorter windows
-
-                            ev = self.calculate_expectancy(wins, losses)
-                            if ev > best_local_ev:
-                                best_local_ev = ev
-                                best_local_config = (rsi_p, ema_p, win, dur)
-
-            # 2. Verify on Test Window
-            if best_local_config:
-                # Run the chosen config on the Test set
-                rsi_p, ema_p, win, dur = best_local_config
-                v_wins, v_losses, v_signals = self._evaluate_strategy(test_df, rsi_p, ema_p, win, dur)
-
-                # Accumulate results for this configuration
-                # Note: We are accumulating results for the "Best Local Config".
-                # But different windows might pick different configs.
-                # However, the goal of WFA is often to simulate "If I followed the strategy optimizer, what would be my result?"
-                # So we sum the results of the *chosen* strategies.
-
-                # But wait, usually we want to see which *parameter set* is robust?
-                # Or do we want to simulate the PnL of the system that re-optimizes?
-                # "Logic: Divide data into N windows. Train on Window i, Test on Window i+1. Sum the results."
-                # This usually means summing the PnL of the "Trading System" (which adapts).
-                # So we sum the v_wins/v_losses of whatever config was chosen for that window.
-
-                key = "System_Performance"
-                if key not in agg_results:
-                    agg_results[key] = {'wins': 0, 'losses': 0, 'signals': 0, 'configs': []}
-
-                agg_results[key]['wins'] += v_wins
-                agg_results[key]['losses'] += v_losses
-                agg_results[key]['signals'] += v_signals
-                agg_results[key]['configs'].append(best_local_config)
-
-        # Final Evaluation
-        if "System_Performance" not in agg_results:
-            return None
-
-        res = agg_results["System_Performance"]
-        total_wins = res['wins']
-        total_losses = res['losses']
-
-        final_ev = self.calculate_expectancy(total_wins, total_losses)
-        final_win_rate = (total_wins / (total_wins + total_losses) * 100) if (total_wins + total_losses) > 0 else 0
-
-        # What to return? Ideally the "Latest" optimal params so the live system can use them.
-        # So we should return the params from the LAST window's optimization.
-        # And the metrics are the historical performance of the WFA process.
-
-        last_config = res['configs'][-1] if res['configs'] else None
-
-        if not last_config:
-            return None
-
-        # If overall Expectancy is positive, we consider it a pass
-        if final_ev > 0:
-            return {
-                'rsi_period': last_config[0],
-                'ema_period': last_config[1],
-                'rsi_vol_window': last_config[2],
-                'optimal_duration': last_config[3],
-                'WinRate': final_win_rate,
-                'Signals': res['signals'],
-                'Expectancy': final_ev
+        # Strategy Grids
+        strategies = {
+            'REVERSAL': {
+                'rsi_period': [7, 14],
+                'ema_period': [100, 200],
+                'rsi_vol_window': [50, 100],
+                'duration': [3, 5]
+            },
+            'TREND': {
+                'macd_fast': [12],
+                'macd_slow': [26],
+                'ema_period': [50, 100],
+                'duration': [5, 10, 15]
+            },
+            'BREAKOUT': {
+                'bb_length': [20],
+                'bb_std': [2.0, 2.5],
+                'duration': [3, 5]
             }
+        }
 
-        return None
+        # Generate parameter combinations helper
+        import itertools
+        def get_combinations(grid):
+            keys = grid.keys()
+            values = grid.values()
+            return [dict(zip(keys, v)) for v in itertools.product(*values)]
+
+        # Aggregate Results: best strategy type & params
+        # We need to pick the best strategy type GLOBALLY across the WFA or per window?
+        # Usually WFA simulates a system that can switch.
+        # But here the user wants to find "The best strategy for this asset".
+        # So we should probably optimize each strategy type independently via WFA,
+        # then compare their final System Performance.
+
+        best_system_result = None
+        best_system_ev = -100
+
+        for strat_type, grid in strategies.items():
+            param_combos = get_combinations(grid)
+
+            # Run WFA for this strategy type
+            agg_results = {'wins': 0, 'losses': 0, 'signals': 0, 'configs': []}
+
+            for start_idx in range(0, len(df) - TRAIN_SIZE - TEST_SIZE, STEP_SIZE):
+                train_start = start_idx
+                train_end = start_idx + TRAIN_SIZE
+                test_start = train_end
+                test_end = train_end + TEST_SIZE
+
+                train_df = df.iloc[train_start:train_end]
+                test_df = df.iloc[test_start:test_end]
+
+                # 1. Optimize on Train
+                best_local_config = None
+                best_local_ev = -100
+
+                for params in param_combos:
+                    if strat_type == 'REVERSAL':
+                        wins, losses, signals = self._eval_reversal(train_df, params)
+                    elif strat_type == 'TREND':
+                        wins, losses, signals = self._eval_trend(train_df, params)
+                    elif strat_type == 'BREAKOUT':
+                        wins, losses, signals = self._eval_breakout(train_df, params)
+
+                    if signals < 3: continue
+
+                    ev = self.calculate_expectancy(wins, losses)
+                    if ev > best_local_ev:
+                        best_local_ev = ev
+                        best_local_config = params
+
+                # 2. Verify on Test
+                if best_local_config:
+                    if strat_type == 'REVERSAL':
+                        v_wins, v_losses, v_signals = self._eval_reversal(test_df, best_local_config)
+                    elif strat_type == 'TREND':
+                        v_wins, v_losses, v_signals = self._eval_trend(test_df, best_local_config)
+                    elif strat_type == 'BREAKOUT':
+                        v_wins, v_losses, v_signals = self._eval_breakout(test_df, best_local_config)
+
+                    agg_results['wins'] += v_wins
+                    agg_results['losses'] += v_losses
+                    agg_results['signals'] += v_signals
+                    agg_results['configs'].append(best_local_config)
+
+            # Evaluate System Performance for this Strategy Type
+            total_wins = agg_results['wins']
+            total_losses = agg_results['losses']
+            system_ev = self.calculate_expectancy(total_wins, total_losses)
+
+            if system_ev > best_system_ev and len(agg_results['configs']) > 0:
+                best_system_ev = system_ev
+
+                final_win_rate = (total_wins / (total_wins + total_losses) * 100) if (total_wins + total_losses) > 0 else 0
+                last_config = agg_results['configs'][-1]
+
+                best_system_result = {
+                    'strategy_type': strat_type,
+                    'config': last_config,
+                    'WinRate': final_win_rate,
+                    'Signals': agg_results['signals'],
+                    'Expectancy': system_ev,
+                    'optimal_duration': last_config['duration'] # Extract specifically for top-level access
+                }
+
+        return best_system_result
 
     def save_best_result(self, symbol, result):
         if not result:
@@ -306,17 +334,33 @@ class Backtester:
                 existing = StrategyParams(symbol=symbol)
                 session.add(existing)
 
-            existing.rsi_period = int(result['rsi_period'])
-            existing.ema_period = int(result['ema_period'])
-            existing.rsi_vol_window = int(result['rsi_vol_window'])
-            existing.optimal_duration = int(result['optimal_duration'])
-
+            # Save core metrics
             existing.win_rate = float(result['WinRate'])
             existing.signal_count = int(result['Signals'])
             existing.last_updated = pd.Timestamp.utcnow()
+            existing.optimal_duration = int(result['optimal_duration'])
+
+            # Save new fields
+            existing.strategy_type = result['strategy_type']
+            existing.config_json = json.dumps(result['config'])
+
+            # Legacy fields (for backward compatibility if possible, or just set defaults)
+            # Some UI components might still read rsi_period/ema_period directly.
+            # We map REVERSAL params if available.
+            config = result['config']
+            if result['strategy_type'] == 'REVERSAL':
+                existing.rsi_period = int(config.get('rsi_period', 14))
+                existing.ema_period = int(config.get('ema_period', 200))
+                existing.rsi_vol_window = int(config.get('rsi_vol_window', 100))
+            else:
+                # For Trend/Breakout, maybe set to 0 or keep last value to indicate "Not used"
+                # Or set to defaults to avoid NULLs if code expects integers
+                existing.rsi_period = 0
+                existing.ema_period = int(config.get('ema_period', 0)) # Trend uses ema_period
+                existing.rsi_vol_window = 0
 
             session.commit()
-            logger.info(f"Saved optimized config for {symbol}: Dur={existing.optimal_duration}m EV={result.get('Expectancy',0):.2f}")
+            logger.info(f"Saved optimized config for {symbol} ({existing.strategy_type}): Dur={existing.optimal_duration}m EV={result.get('Expectancy',0):.2f}")
         except Exception as e:
             logger.error(f"Error saving strategy params for {symbol}: {e}")
             session.rollback()

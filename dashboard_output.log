@@ -20,238 +20,26 @@ INFO:Main:Starting Engine on: ['R_10', 'R_100']
 INFO:deriv_quant_py.core.engine:Subscribing to R_10
 INFO:deriv_quant_py.core.engine:Subscribing to R_100
 ERROR:deriv_quant_py.core.connection:Error in message handler: 'NoneType' object has no attribute 'get'
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:51] "GET / HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:51] "GET /_dash-component-suites/dash/deps/polyfill@7.v3_3_0m1768383268.12.1.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:51] "GET /_dash-component-suites/dash/deps/react@18.v3_3_0m1768383268.3.1.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:51] "GET /_dash-component-suites/dash/deps/react-dom@18.v3_3_0m1768383268.3.1.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:51] "GET /_dash-component-suites/dash/dash-renderer/build/dash_renderer.v3_3_0m1768383267.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:51] "GET /_dash-component-suites/dash/deps/prop-types@15.v3_3_0m1768383268.8.1.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:51] "GET /_dash-component-suites/dash_bootstrap_components/_components/dash_bootstrap_components.v2_0_4m1768383268.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:51] "GET /_dash-component-suites/dash/dcc/dash_core_components.v3_3_0m1768383267.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:51] "GET /_dash-component-suites/dash/dcc/dash_core_components-shared.v3_3_0m1768383267.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:51] "GET /_dash-component-suites/dash/html/dash_html_components.v3_0_5m1768383268.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:51] "GET /_dash-component-suites/dash/dash_table/bundle.v6_0_5m1768383267.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "GET /_dash-layout HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "GET /_dash-dependencies HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "GET /_dash-component-suites/dash/dcc/async-graph.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "GET /_dash-component-suites/plotly/package_data/plotly.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:52] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:53] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:53] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:53] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:58] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:58] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:58] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:58] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:58] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:58] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:58] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:58] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:58] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:34:58] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET / HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-component-suites/dash_bootstrap_components/_components/dash_bootstrap_components.v2_0_4m1768383268.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-component-suites/dash/deps/prop-types@15.v3_3_0m1768383268.8.1.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-component-suites/dash/dash-renderer/build/dash_renderer.v3_3_0m1768383267.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-component-suites/dash/deps/polyfill@7.v3_3_0m1768383268.12.1.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-component-suites/dash/deps/react@18.v3_3_0m1768383268.3.1.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-component-suites/dash/deps/react-dom@18.v3_3_0m1768383268.3.1.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-component-suites/dash/dcc/dash_core_components.v3_3_0m1768383267.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-component-suites/dash/html/dash_html_components.v3_0_5m1768383268.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-component-suites/dash/dcc/dash_core_components-shared.v3_3_0m1768383267.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-component-suites/dash/dash_table/bundle.v6_0_5m1768383267.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-layout HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-dependencies HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:23] "GET /_dash-component-suites/dash/dcc/async-graph.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:24] "GET /_dash-component-suites/plotly/package_data/plotly.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:24] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:24] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:24] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:24] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:24] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:24] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:24] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:24] "POST /_dash-update-component HTTP/1.1" 200 -
-ERROR:deriv_quant_py.dashboard.app:Exception on /_dash-update-component [POST]
-Traceback (most recent call last):
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/flask/app.py", line 1511, in wsgi_app
-    response = self.full_dispatch_request()
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/flask/app.py", line 919, in full_dispatch_request
-    rv = self.handle_user_exception(e)
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/flask/app.py", line 917, in full_dispatch_request
-    rv = self.dispatch_request()
-         ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/flask/app.py", line 902, in dispatch_request
-    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/_get_app.py", line 17, in wrap
-    return ctx.run(func, self, *args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/dash.py", line 1585, in dispatch
-    response_data = ctx.run(partial_func)
-                    ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/_callback.py", line 721, in add_context
-    raise err
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/_callback.py", line 712, in add_context
-    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/_callback.py", line 59, in _invoke_callback
-    return func(*args, **kwargs)  # %% callback invoked %%
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/app/deriv_quant_py/dashboard/app.py", line 468, in update_single_chart_view
-    fig = generate_chart(selected_symbol)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/app/deriv_quant_py/dashboard/app.py", line 563, in generate_chart
-    rsi = ta.rsi(df['close'], length=Config.RSI_PERIOD)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/pandas_ta/momentum/rsi.py", line 71, in rsi
-    negative = close.diff(drift)
-               ^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/pandas/core/series.py", line 3134, in diff
-    result = algorithms.diff(self._values, periods)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/pandas/core/algorithms.py", line 1435, in diff
-    out_arr[res_indexer] = op(arr[res_indexer], arr[lag_indexer])
-                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-TypeError: unsupported operand type(s) for -: 'str' and 'float'
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:35:24] "[35m[1mPOST /_dash-update-component HTTP/1.1[0m" 500 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:54] "GET / HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:54] "GET /_dash-component-suites/dash/deps/react-dom@18.v3_3_0m1768383268.3.1.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:54] "GET /_dash-component-suites/dash/deps/prop-types@15.v3_3_0m1768383268.8.1.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:54] "GET /_dash-component-suites/dash_bootstrap_components/_components/dash_bootstrap_components.v2_0_4m1768383268.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:54] "GET /_dash-component-suites/dash/deps/react@18.v3_3_0m1768383268.3.1.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:54] "GET /_dash-component-suites/dash/dash-renderer/build/dash_renderer.v3_3_0m1768383267.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:54] "GET /_dash-component-suites/dash/deps/polyfill@7.v3_3_0m1768383268.12.1.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:54] "GET /_dash-component-suites/dash/html/dash_html_components.v3_0_5m1768383268.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:54] "GET /_dash-component-suites/dash/dcc/dash_core_components-shared.v3_3_0m1768383267.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:54] "GET /_dash-component-suites/dash/dcc/dash_core_components.v3_3_0m1768383267.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:54] "GET /_dash-component-suites/dash/dash_table/bundle.v6_0_5m1768383267.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "GET /_dash-layout HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "GET /_dash-dependencies HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "GET /_dash-component-suites/dash/dcc/async-graph.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "GET /_dash-component-suites/plotly/package_data/plotly.min.js HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "POST /_dash-update-component HTTP/1.1" 200 -
-ERROR:deriv_quant_py.dashboard.app:Exception on /_dash-update-component [POST]
-Traceback (most recent call last):
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/flask/app.py", line 1511, in wsgi_app
-    response = self.full_dispatch_request()
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/flask/app.py", line 919, in full_dispatch_request
-    rv = self.handle_user_exception(e)
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/flask/app.py", line 917, in full_dispatch_request
-    rv = self.dispatch_request()
-         ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/flask/app.py", line 902, in dispatch_request
-    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/_get_app.py", line 17, in wrap
-    return ctx.run(func, self, *args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/dash.py", line 1585, in dispatch
-    response_data = ctx.run(partial_func)
-                    ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/_callback.py", line 721, in add_context
-    raise err
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/_callback.py", line 712, in add_context
-    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/_callback.py", line 59, in _invoke_callback
-    return func(*args, **kwargs)  # %% callback invoked %%
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/app/deriv_quant_py/dashboard/app.py", line 468, in update_single_chart_view
-    return fig, f"Live Chart: {selected_symbol}", {"display": "block"}
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/app/deriv_quant_py/dashboard/app.py", line 563, in generate_chart
-    ), row=1, col=1)
-          ^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/pandas_ta/momentum/rsi.py", line 71, in rsi
-    negative = close.diff(drift)
-               ^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/pandas/core/series.py", line 3134, in diff
-    result = algorithms.diff(self._values, periods)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/pandas/core/algorithms.py", line 1435, in diff
-    out_arr[res_indexer] = op(arr[res_indexer], arr[lag_indexer])
-                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-TypeError: unsupported operand type(s) for -: 'str' and 'float'
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "[35m[1mPOST /_dash-update-component HTTP/1.1[0m" 500 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "POST /_dash-update-component HTTP/1.1" 200 -
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "POST /_dash-update-component HTTP/1.1" 200 -
-ERROR:deriv_quant_py.dashboard.app:Exception on /_dash-update-component [POST]
-Traceback (most recent call last):
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/flask/app.py", line 1511, in wsgi_app
-    response = self.full_dispatch_request()
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/flask/app.py", line 919, in full_dispatch_request
-    rv = self.handle_user_exception(e)
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/flask/app.py", line 917, in full_dispatch_request
-    rv = self.dispatch_request()
-         ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/flask/app.py", line 902, in dispatch_request
-    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/_get_app.py", line 17, in wrap
-    return ctx.run(func, self, *args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/dash.py", line 1585, in dispatch
-    response_data = ctx.run(partial_func)
-                    ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/_callback.py", line 721, in add_context
-    raise err
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/_callback.py", line 712, in add_context
-    output_value = _invoke_callback(func, *func_args, **func_kwargs)  # type: ignore[reportArgumentType]
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/dash/_callback.py", line 59, in _invoke_callback
-    return func(*args, **kwargs)  # %% callback invoked %%
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/app/deriv_quant_py/dashboard/app.py", line 468, in update_single_chart_view
-    return fig, f"Live Chart: {selected_symbol}", {"display": "block"}
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/app/deriv_quant_py/dashboard/app.py", line 563, in generate_chart
-    ), row=1, col=1)
-          ^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/pandas_ta/momentum/rsi.py", line 71, in rsi
-    negative = close.diff(drift)
-               ^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/pandas/core/series.py", line 3134, in diff
-    result = algorithms.diff(self._values, periods)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/jules/.pyenv/versions/3.12.12/lib/python3.12/site-packages/pandas/core/algorithms.py", line 1435, in diff
-    out_arr[res_indexer] = op(arr[res_indexer], arr[lag_indexer])
-                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-TypeError: unsupported operand type(s) for -: 'str' and 'float'
-INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 09:39:55] "[35m[1mPOST /_dash-update-component HTTP/1.1[0m" 500 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:25] "GET /backtest HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:25] "GET /_dash-component-suites/dash/deps/polyfill@7.v3_3_0m1768395702.12.1.min.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:25] "GET /_dash-component-suites/dash/deps/prop-types@15.v3_3_0m1768395702.8.1.min.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:25] "GET /_dash-component-suites/dash/dash-renderer/build/dash_renderer.v3_3_0m1768395702.min.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:25] "GET /_dash-component-suites/dash/deps/react@18.v3_3_0m1768395702.3.1.min.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:25] "GET /_dash-component-suites/dash_bootstrap_components/_components/dash_bootstrap_components.v2_0_4m1768395703.min.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:25] "GET /_dash-component-suites/dash/deps/react-dom@18.v3_3_0m1768395702.3.1.min.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:25] "GET /_dash-component-suites/dash/dcc/dash_core_components.v3_3_0m1768395702.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:25] "GET /_dash-component-suites/dash/html/dash_html_components.v3_0_5m1768395703.min.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:25] "GET /_dash-component-suites/dash/dash_table/bundle.v6_0_5m1768395702.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:25] "GET /_dash-component-suites/dash/dcc/dash_core_components-shared.v3_3_0m1768395702.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:26] "GET /_dash-layout HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:26] "GET /_dash-dependencies HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:26] "POST /_dash-update-component HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:26] "POST /_dash-update-component HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:26] "POST /_dash-update-component HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:26] "GET /_dash-component-suites/dash/dcc/async-dropdown.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:26] "GET /_dash-component-suites/dash/dcc/async-graph.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:26] "GET /_dash-component-suites/dash/dash_table/async-highlight.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:26] "GET /_dash-component-suites/dash/dash_table/async-table.js HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:26] "POST /_dash-update-component HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:26] "POST /_dash-update-component HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [14/Jan/2026 13:03:26] "GET /_dash-component-suites/plotly/package_data/plotly.min.js HTTP/1.1" 200 -
