@@ -1,11 +1,11 @@
 import unittest
 import pandas as pd
 import numpy as np
-from deriv_quant_py.strategies.triple_confluence import TripleConfluenceStrategy
+from deriv_quant_py.strategies.signal_generator import SignalGenerator
 
 class TestTripleConfluence(unittest.TestCase):
     def setUp(self):
-        self.strategy = TripleConfluenceStrategy()
+        self.strategy = SignalGenerator()
 
     def test_chop_filter_rejection(self):
         # Create synthetic data with Strong Trend (Low CHOP)

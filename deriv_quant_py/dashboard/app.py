@@ -2,7 +2,7 @@ from dash import Dash, html, dcc, Output, Input, State, no_update, dash_table
 import dash
 import dash_bootstrap_components as dbc
 from deriv_quant_py.dashboard.components import create_sidebar, create_top_bar, create_market_grid, create_chart_area, create_logs_area
-from deriv_quant_py.database import init_db, SignalLog, Trade
+from deriv_quant_py.database import init_db, SignalLog, Trade, StrategyParams
 from deriv_quant_py.config import Config
 from deriv_quant_py.shared_state import state
 import pandas as pd
@@ -108,8 +108,77 @@ def backtest_layout():
             html.Div([
                 dcc.Graph(id="bt-chart"),
                 html.Hr(),
-                html.H4("Detailed Results"),
-                html.Div(id="bt-table-container")
+                html.H4("Global Portfolio Overview"),
+
+                # Portfolio Table Controls
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Button("Previous", id="pt-prev", color="secondary", size="sm", className="me-2"),
+                        dbc.Button("Next", id="pt-next", color="secondary", size="sm"),
+                        html.Span(" Page 1", id="pt-page-label", className="ms-2")
+                    ], width=6, className="mb-2")
+                ]),
+
+                dash_table.DataTable(
+                    id='portfolio-table',
+                    columns=[
+                        {'name': 'Symbol', 'id': 'symbol'},
+                        {'name': 'Strategy', 'id': 'strategy_type'},
+                        {'name': 'Win Rate', 'id': 'win_rate', 'type': 'numeric', 'format': {'specifier': '.1f'}},
+                        {'name': 'Expectancy', 'id': 'expectancy', 'type': 'numeric', 'format': {'specifier': '.3f'}},
+                        {'name': 'Duration (m)', 'id': 'optimal_duration'},
+                        {'name': 'Last Updated', 'id': 'last_updated'}
+                    ],
+                    data=[],
+                    style_header={
+                        'backgroundColor': 'rgb(30, 30, 30)',
+                        'color': 'white',
+                        'fontWeight': 'bold'
+                    },
+                    style_data={
+                        'backgroundColor': 'rgb(50, 50, 50)',
+                        'color': 'white'
+                    },
+                    style_data_conditional=[
+                        {
+                            'if': {
+                                'filter_query': '{win_rate} >= 55',
+                                'column_id': 'win_rate'
+                            },
+                            'backgroundColor': '#28a745',
+                            'color': 'white'
+                        },
+                        {
+                            'if': {
+                                'filter_query': '{win_rate} < 45',
+                                'column_id': 'win_rate'
+                            },
+                            'backgroundColor': '#dc3545',
+                            'color': 'white'
+                        },
+                         {
+                            'if': {
+                                'filter_query': '{expectancy} > 0',
+                                'column_id': 'expectancy'
+                            },
+                            'color': '#28a745'
+                        },
+                        {
+                            'if': {
+                                'filter_query': '{expectancy} < 0',
+                                'column_id': 'expectancy'
+                            },
+                            'color': '#dc3545'
+                        }
+                    ],
+                    style_cell={
+                        'textAlign': 'left',
+                        'padding': '10px'
+                    },
+                    page_action='custom',
+                    page_current=0,
+                    page_size=20
+                )
             ])
         )
     ])
@@ -187,7 +256,6 @@ def update_scan_progress_bar(n):
 
 @app.callback(
     Output("bt-chart", "figure", allow_duplicate=True),
-    Output("bt-table-container", "children"),
     Input("interval-fast", "n_intervals"),
     prevent_initial_call=True
 )
@@ -200,18 +268,22 @@ def check_backtest_result(n):
         elif isinstance(res, pd.DataFrame):
             df = res
         else:
-            return no_update, no_update
+            if isinstance(res, dict) and 'Expectancy' in res:
+                # Single result result
+                df = pd.DataFrame([res])
+            else:
+                return no_update
 
         if df.empty:
-             return go.Figure(layout={'title': 'No Data', 'template': 'plotly_dark'}), "No results found."
+             return go.Figure(layout={'title': 'No Data', 'template': 'plotly_dark'})
 
         # Prepare for Bar Chart
         # Normalize columns if missing (backward compatibility)
         if 'rsi_period' in df.columns: df.rename(columns={'rsi_period': 'RSI'}, inplace=True)
         if 'ema_period' in df.columns: df.rename(columns={'ema_period': 'EMA'}, inplace=True)
 
-        # X-axis Label: RSI:X EMA:Y Dur:Z
-        df['Label'] = df.apply(lambda row: f"RSI:{row['RSI']} EMA:{row['EMA']} Dur:{row.get('optimal_duration', 3)}m", axis=1)
+        # X-axis Label
+        df['Label'] = df.apply(lambda row: f"{row.get('strategy_type', 'UNK')}: Dur {row.get('optimal_duration', 3)}m", axis=1)
 
         # Bar Chart (Expectancy)
         # If Expectancy exists, use it. Else fall back to WinRate
@@ -230,38 +302,69 @@ def check_backtest_result(n):
              fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
              fig.update_layout(yaxis_range=[0, 100])
 
-        # Data Table
-        # Select relevant columns
-        cols = ['RSI', 'EMA', 'Signals', 'WinRate']
-        if 'optimal_duration' in df.columns: cols.append('optimal_duration')
-        if 'rsi_vol_window' in df.columns: cols.append('rsi_vol_window')
-        if 'Expectancy' in df.columns: cols.append('Expectancy')
+        return fig
+    return no_update
 
-        df_display = df[cols].copy()
+# Pagination Callback
+@app.callback(
+    Output('portfolio-table', 'data'),
+    Output('pt-page-label', 'children'),
+    Input('portfolio-table', 'page_current'),
+    Input('portfolio-table', 'page_size'),
+    Input('interval-slow', 'n_intervals'),
+    Input('pt-prev', 'n_clicks'),
+    Input('pt-next', 'n_clicks'),
+    State('portfolio-table', 'page_current')
+)
+def update_portfolio_table(page_current, page_size, n, prev_clicks, next_clicks, current_page_state):
+    # Handle custom buttons if they were used (optional, dash_table has built-in pagination UI too)
+    # If we stick to 'custom' action, we must drive the data.
 
-        # Rounding
-        if 'WinRate' in df_display.columns: df_display['WinRate'] = df_display['WinRate'].round(2)
-        if 'Expectancy' in df_display.columns: df_display['Expectancy'] = df_display['Expectancy'].round(3)
+    # We rely on page_current from the table which updates when user clicks table built-in prev/next
+    # If we used buttons, we would need to output 'page_current'
 
-        table = dash_table.DataTable(
-            data=df_display.to_dict('records'),
-            columns=[{'name': i, 'id': i} for i in df_display.columns],
-            style_header={
-                'backgroundColor': 'rgb(30, 30, 30)',
-                'color': 'white'
-            },
-            style_data={
-                'backgroundColor': 'rgb(50, 50, 50)',
-                'color': 'white'
-            },
-            style_cell={
-                'textAlign': 'left',
-                'padding': '10px'
-            }
-        )
+    # Let's just use the table's requested page
+    if page_current is None: page_current = 0
+    if page_size is None: page_size = 20
 
-        return fig, table
-    return no_update, no_update
+    try:
+        with SessionLocal() as session:
+            # Query
+            query = session.query(StrategyParams).order_by(StrategyParams.last_updated.desc())
+
+            # Pagination
+            offset = page_current * page_size
+            total = query.count()
+            rows = query.offset(offset).limit(page_size).all()
+
+            data = []
+            for r in rows:
+                # Calculate Expectancy if not stored (Backtester calculates it, but DB stores components?)
+                # DB doesn't store Expectancy explicitly? Checking database.py:
+                # DB: win_rate, signal_count... no Expectancy column.
+                # Re-calculate or assume roughly?
+                # Expectancy = (WinRate% * 0.85) - (LossRate% * 1.0)
+
+                wr = r.win_rate if r.win_rate else 0
+                lr = 100 - wr
+                ev = ((wr/100) * 0.85) - ((lr/100) * 1.0)
+
+                strat = r.strategy_type if r.strategy_type else "Legacy (Reversal)"
+
+                data.append({
+                    'symbol': r.symbol,
+                    'strategy_type': strat,
+                    'win_rate': wr,
+                    'expectancy': ev,
+                    'optimal_duration': r.optimal_duration,
+                    'last_updated': r.last_updated
+                })
+
+            return data, f" Page {page_current + 1}"
+
+    except Exception as e:
+        print(f"Error fetching portfolio: {e}")
+        return [], " Error"
 
 @app.callback(Output('page-content', 'children'),
               [Input('url', 'pathname')])

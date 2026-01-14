@@ -3,7 +3,7 @@ import logging
 from collections import deque
 from deriv_quant_py.config import Config
 from deriv_quant_py.core.connection import DerivClient
-from deriv_quant_py.strategies.triple_confluence import TripleConfluenceStrategy
+from deriv_quant_py.strategies.signal_generator import SignalGenerator
 from deriv_quant_py.database import SignalLog, StrategyParams
 from deriv_quant_py.shared_state import state
 from sqlalchemy.orm import Session
@@ -16,7 +16,7 @@ class TradingEngine:
         self.client = client
         self.db = db_session
         self.executor = executor
-        self.strategy = TripleConfluenceStrategy()
+        self.strategy = SignalGenerator()
         # Store candles: {symbol: deque([candles], maxlen=300)}
         self.candles = {}
         self.running = False
@@ -144,16 +144,19 @@ class TradingEngine:
         state.update_history(symbol, data)
 
         # Retrieve specific params from DB
-        params = None
+        params = {}
         try:
             strategy_params = self.db.query(StrategyParams).filter_by(symbol=symbol).first()
             if strategy_params:
-                params = {
-                    'rsi_period': strategy_params.rsi_period,
-                    'ema_period': strategy_params.ema_period,
-                    'rsi_vol_window': strategy_params.rsi_vol_window
-                }
-                # logger.debug(f"Using custom params for {symbol}: {params}")
+                # Pass raw object attrs or dict
+                params['strategy_type'] = strategy_params.strategy_type
+                params['config_json'] = strategy_params.config_json
+
+                # Legacy fallback
+                params['rsi_period'] = strategy_params.rsi_period
+                params['ema_period'] = strategy_params.ema_period
+                params['rsi_vol_window'] = strategy_params.rsi_vol_window
+
         except Exception as e:
             logger.error(f"Error fetching params for {symbol}: {e}")
 
