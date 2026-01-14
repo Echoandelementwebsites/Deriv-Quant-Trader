@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from typing import Optional, Dict, Any, Callable
+from deriv_quant_py.shared_state import state
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class DerivClient:
                         # Authenticate
                         if self.token:
                             await self.authorize()
+                            await self.send_request({"balance": 1, "subscribe": 1})
 
                         # Signal that we are connected and (attempted to) authorize
                         self._connected_event.set()
@@ -154,7 +156,13 @@ class DerivClient:
                 self.pending_requests[req_id].set_result(data)
             del self.pending_requests[req_id]
 
-        # 2. General Handlers (Subscriptions)
+        # 2. Balance Update
+        if data.get('msg_type') == 'balance':
+            balance = data.get('balance', {}).get('balance')
+            if balance is not None:
+                state.update_balance(balance)
+
+        # 3. General Handlers (Subscriptions)
         for handler in self.msg_handlers:
             try:
                 if asyncio.iscoroutinefunction(handler):

@@ -16,8 +16,8 @@ def create_sidebar():
                 switch=True,
                 className="mb-3"
             ),
-            html.Label("Risk Multiplier"),
-            dbc.Input(id="risk-mult", type="number", value=2.1, className="mb-2"),
+            html.Label("Risk Percentage"),
+            dbc.Input(id="risk-perc", type="number", value=1.0, className="mb-2"),
             html.Hr(),
             dbc.Nav(
                 [

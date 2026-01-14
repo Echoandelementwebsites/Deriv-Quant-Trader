@@ -183,81 +183,116 @@ class Backtester:
 
     def run_wfa_optimization(self, df):
         """
-        Walk-Forward Analysis:
-        1. Split Data (70% Train, 30% Verify)
-        2. Optimize on Train
-        3. Verify on Test
+        Rolling Walk-Forward Analysis:
+        Slide a training window over the data, test on the subsequent small window.
+        Train: 3000 candles
+        Test: 500 candles
+        Step: 500 candles
         """
-        if len(df) < 500:
+        TRAIN_SIZE = 3000
+        TEST_SIZE = 500
+        STEP_SIZE = 500
+
+        if len(df) < TRAIN_SIZE + TEST_SIZE:
+            logger.info(f"Not enough data for Rolling WFA. Needed {TRAIN_SIZE+TEST_SIZE}, got {len(df)}")
             return None
 
-        split_idx = int(len(df) * 0.7)
-        train_df = df.iloc[:split_idx]
-        test_df = df.iloc[split_idx:]
-
         # Search Space
-        # Reduced space to keep runtime reasonable in sandbox
         rsi_periods = [7, 14]
         ema_periods = [100, 200]
         durations = [3, 5, 10, 15] # Minutes
         rsi_vol_windows = [50, 100]
 
-        best_train_config = None
-        best_train_ev = -100
+        # Aggregate Results
+        # Key: (rsi, ema, vol, dur) -> {wins, losses, signals}
+        agg_results = {}
 
-        # TRAIN
-        for rsi_p in rsi_periods:
-            for ema_p in ema_periods:
-                for win in rsi_vol_windows:
-                    for dur in durations:
-                        wins, losses, signals = self._evaluate_strategy(train_df, rsi_p, ema_p, win, dur)
+        # Rolling Window Loop
+        for start_idx in range(0, len(df) - TRAIN_SIZE - TEST_SIZE, STEP_SIZE):
+            train_start = start_idx
+            train_end = start_idx + TRAIN_SIZE
+            test_start = train_end
+            test_end = train_end + TEST_SIZE
 
-                        if signals < 5: continue # Min sample size
+            train_df = df.iloc[train_start:train_end]
+            test_df = df.iloc[test_start:test_end]
 
-                        ev = self.calculate_expectancy(wins, losses)
+            # 1. Optimize on Train Window
+            best_local_config = None
+            best_local_ev = -100
 
-                        # Maximize Expectancy * log(signals) to favor frequent good trades?
-                        # Or just raw Expectancy. Let's stick to Expectancy but require min trades.
-                        if ev > best_train_ev:
-                            best_train_ev = ev
-                            best_train_config = {
-                                'rsi_period': rsi_p,
-                                'ema_period': ema_p,
-                                'rsi_vol_window': win,
-                                'optimal_duration': dur
-                            }
+            for rsi_p in rsi_periods:
+                for ema_p in ema_periods:
+                    for win in rsi_vol_windows:
+                        for dur in durations:
+                            wins, losses, signals = self._evaluate_strategy(train_df, rsi_p, ema_p, win, dur)
+                            if signals < 3: continue # Lower threshold for shorter windows
 
-        if not best_train_config:
+                            ev = self.calculate_expectancy(wins, losses)
+                            if ev > best_local_ev:
+                                best_local_ev = ev
+                                best_local_config = (rsi_p, ema_p, win, dur)
+
+            # 2. Verify on Test Window
+            if best_local_config:
+                # Run the chosen config on the Test set
+                rsi_p, ema_p, win, dur = best_local_config
+                v_wins, v_losses, v_signals = self._evaluate_strategy(test_df, rsi_p, ema_p, win, dur)
+
+                # Accumulate results for this configuration
+                # Note: We are accumulating results for the "Best Local Config".
+                # But different windows might pick different configs.
+                # However, the goal of WFA is often to simulate "If I followed the strategy optimizer, what would be my result?"
+                # So we sum the results of the *chosen* strategies.
+
+                # But wait, usually we want to see which *parameter set* is robust?
+                # Or do we want to simulate the PnL of the system that re-optimizes?
+                # "Logic: Divide data into N windows. Train on Window i, Test on Window i+1. Sum the results."
+                # This usually means summing the PnL of the "Trading System" (which adapts).
+                # So we sum the v_wins/v_losses of whatever config was chosen for that window.
+
+                key = "System_Performance"
+                if key not in agg_results:
+                    agg_results[key] = {'wins': 0, 'losses': 0, 'signals': 0, 'configs': []}
+
+                agg_results[key]['wins'] += v_wins
+                agg_results[key]['losses'] += v_losses
+                agg_results[key]['signals'] += v_signals
+                agg_results[key]['configs'].append(best_local_config)
+
+        # Final Evaluation
+        if "System_Performance" not in agg_results:
             return None
 
-        # VERIFY
-        # Run best config on Test Data
-        v_wins, v_losses, v_signals = self._evaluate_strategy(
-            test_df,
-            best_train_config['rsi_period'],
-            best_train_config['ema_period'],
-            best_train_config['rsi_vol_window'],
-            best_train_config['optimal_duration']
-        )
+        res = agg_results["System_Performance"]
+        total_wins = res['wins']
+        total_losses = res['losses']
 
-        v_ev = self.calculate_expectancy(v_wins, v_losses)
-        v_win_rate = (v_wins / (v_wins + v_losses) * 100) if (v_wins + v_losses) > 0 else 0
+        final_ev = self.calculate_expectancy(total_wins, total_losses)
+        final_win_rate = (total_wins / (total_wins + total_losses) * 100) if (total_wins + total_losses) > 0 else 0
 
-        result = best_train_config.copy()
-        result['WinRate'] = v_win_rate
-        result['Signals'] = v_signals
-        result['Expectancy'] = v_ev
+        # What to return? Ideally the "Latest" optimal params so the live system can use them.
+        # So we should return the params from the LAST window's optimization.
+        # And the metrics are the historical performance of the WFA process.
 
-        # Threshold: Expectancy > 0 implies profitable (with 85% payout)
-        # A safer threshold might be > 0.05
-        if v_ev > 0:
-            return result
-        else:
-            # If verification failed (negative EV), do we discard?
-            # Or return it but flag it?
-            # User requirement: "Deploy: If Verification Expectancy > Threshold, save params".
-            # If not, return None?
+        last_config = res['configs'][-1] if res['configs'] else None
+
+        if not last_config:
             return None
+
+        # If overall Expectancy is positive, we consider it a pass
+        if final_ev > 0:
+            return {
+                'rsi_period': last_config[0],
+                'ema_period': last_config[1],
+                'rsi_vol_window': last_config[2],
+                'optimal_duration': last_config[3],
+                'WinRate': final_win_rate,
+                'Signals': res['signals'],
+                'Expectancy': final_ev
+            }
+
+        return None
 
     def save_best_result(self, symbol, result):
         if not result:

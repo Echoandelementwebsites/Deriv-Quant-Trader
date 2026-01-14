@@ -157,7 +157,8 @@ class TradingEngine:
         except Exception as e:
             logger.error(f"Error fetching params for {symbol}: {e}")
 
-        result = self.strategy.analyze(data, params=params)
+        # Run strategy in thread to avoid blocking event loop
+        result = await asyncio.to_thread(self.strategy.analyze, data, params=params)
 
         # Update shared state with latest price
         if result:

@@ -277,16 +277,14 @@ def display_page(pathname):
     Input("interval-fast", "n_intervals")
 )
 def update_logs(n):
-    session = SessionLocal()
     try:
-        logs = session.query(SignalLog).order_by(SignalLog.timestamp.desc()).limit(20).all()
-        if not logs:
-             return html.P("No logs available yet.")
-        return [html.P(f"{log.timestamp.strftime('%H:%M:%S')} - {log.symbol} - {log.signal} - {log.reason}") for log in logs]
+        with SessionLocal() as session:
+            logs = session.query(SignalLog).order_by(SignalLog.timestamp.desc()).limit(20).all()
+            if not logs:
+                 return html.P("No logs available yet.")
+            return [html.P(f"{log.timestamp.strftime('%H:%M:%S')} - {log.symbol} - {log.signal} - {log.reason}") for log in logs]
     except Exception as e:
         return html.P(f"Error fetching logs: {e}")
-    finally:
-        session.close()
 
 @app.callback(
     Output("scanner-state", "data"),
@@ -356,14 +354,26 @@ def update_scanner(n, saved_active_item):
 
 @app.callback(
     Output("connection-status", "children"),
+    Output("balance-display", "children"),
     Input("master-switch", "value"),
-    Input("risk-mult", "value")
+    Input("risk-perc", "value"),
+    Input("interval-fast", "n_intervals")
 )
-def update_settings(switch_value, risk_val):
+def update_settings(switch_value, risk_val, n):
     is_active = "active" in switch_value
     state.set_trading_active(is_active)
+
+    # Update risk settings
+    if risk_val is not None:
+        state.set_risk_settings(risk_val, 50.0) # Maintaining default daily loss for now
+
     status_text = "Trading Active" if is_active else "Trading Stopped"
-    return status_text
+
+    # Update Balance
+    balance = state.get_balance()
+    balance_text = f"Balance: ${balance:,.2f}"
+
+    return status_text, balance_text
 
 # --- Callbacks for View Mode & Grid ---
 
@@ -522,6 +532,12 @@ def generate_chart(symbol, height=600):
     if df.empty:
         return go.Figure(layout={'title': f'{symbol} (No Data)', 'template': 'plotly_dark', 'height': height})
 
+    # Ensure numeric types
+    cols = ['open', 'high', 'low', 'close']
+    for c in cols:
+        if c in df.columns:
+            df[c] = df[c].astype(float)
+
     df['epoch'] = pd.to_datetime(df['epoch'], unit='s')
 
     # Imports
@@ -561,6 +577,7 @@ def generate_chart(symbol, height=600):
         template="plotly_dark",
         xaxis_rangeslider_visible=False,
         height=height,
-        margin=dict(l=50, r=50, t=30, b=30)
+        margin=dict(l=50, r=50, t=30, b=30),
+        uirevision='constant' # Preserve zoom/pan
     )
     return fig

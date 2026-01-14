@@ -28,7 +28,7 @@ class SharedState:
         }
         self.system_status = {
             "trading_active": False,
-            "risk_multiplier": 2.1,
+            "risk_percentage": 1.0,
             "daily_loss_limit": 50.0
         }
         self.connection_status = False
@@ -114,14 +114,22 @@ class SharedState:
         with self._lock:
             self.system_status["trading_active"] = active
 
-    def set_risk_settings(self, multiplier, limit):
+    def set_risk_settings(self, percentage, limit):
         with self._lock:
-            self.system_status["risk_multiplier"] = float(multiplier)
+            self.system_status["risk_percentage"] = float(percentage)
             self.system_status["daily_loss_limit"] = float(limit)
 
     def get_scanner_data(self):
         with self._lock:
             return self.scanner_data.copy()
+
+    def update_balance(self, balance):
+        with self._lock:
+            self.balance = float(balance)
+
+    def get_balance(self):
+        with self._lock:
+            return self.balance
 
     def is_trading_active(self):
         with self._lock:

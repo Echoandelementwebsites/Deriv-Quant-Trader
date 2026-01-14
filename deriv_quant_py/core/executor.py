@@ -16,7 +16,6 @@ class TradeExecutor:
         self.client = client
         self.db = db_session
         self.daily_loss = 0.0
-        self.risk_multiplier = Config.RISK_MULTIPLIER
         self.base_stake = 10.0 # Default, should come from config or UI
 
         # Initialize Active Trades in SharedState
@@ -115,16 +114,20 @@ class TradeExecutor:
             logger.error(f"Execution Exception: {e}")
 
     def _calculate_stake(self, symbol):
-        # Martingale: Look at last closed trade for this symbol
-        last_trade = self.db.query(Trade).filter(
-            Trade.symbol == symbol,
-            Trade.status.in_(['WON', 'LOST'])
-        ).order_by(Trade.entry_time.desc()).first()
+        # Fixed Risk Model: Stake = Balance * Risk_Percentage
+        balance = state.get_balance()
+        risk_percentage = state.get_risk_settings().get("risk_percentage", 1.0)
 
-        if last_trade and last_trade.status == 'LOST':
-            return last_trade.stake * self.risk_multiplier
+        # Calculate stake
+        stake = balance * (risk_percentage / 100.0)
 
-        return self.base_stake
+        # Ensure minimum stake (Deriv usually requires ~0.35 USD)
+        if stake < 0.35:
+            logger.warning(f"Calculated stake ${stake:.2f} is below minimum. Adjusting to $0.35.")
+            stake = 0.35
+
+        # Optional: Round to 2 decimals
+        return round(stake, 2)
 
     def _check_daily_loss_limit(self):
         # Sum profit of trades today
