@@ -93,6 +93,12 @@ class SignalGenerator:
         else:
              val_adx = adx.iloc[-1, 0] # ADX_14
 
+        # NEW: Major Trend Filter (EMA 200)
+        ema_200 = ta.ema(df['close'], length=200)
+        # Handle start where EMA is NaN
+        ema_200 = ema_200.fillna(df['close'])
+        val_ema_200 = ema_200.iloc[-1]
+
         current_price = df['close'].iloc[-1]
         val_st = st_line.iloc[-1]
 
@@ -100,16 +106,16 @@ class SignalGenerator:
         reason = ""
 
         # Logic:
-        # Long: Close > ST Line (Trend Green) AND ADX > 20
-        # Short: Close < ST Line (Trend Red) AND ADX > 20
+        # Long: Close > ST Line (Trend Green) AND ADX > 20 AND Price > EMA 200
+        # Short: Close < ST Line (Trend Red) AND ADX > 20 AND Price < EMA 200
 
         if val_adx > 20:
-            if current_price > val_st:
+            if current_price > val_st and current_price > val_ema_200:
                 signal = 'CALL'
-                reason = f"Supertrend: Price {current_price:.2f} > ST {val_st:.2f} & ADX {val_adx:.1f} > 20"
-            elif current_price < val_st:
+                reason = f"Supertrend: Price {current_price:.2f} > ST {val_st:.2f} & ADX {val_adx:.1f} > 20 & Price > EMA 200"
+            elif current_price < val_st and current_price < val_ema_200:
                 signal = 'PUT'
-                reason = f"Supertrend: Price {current_price:.2f} < ST {val_st:.2f} & ADX {val_adx:.1f} > 20"
+                reason = f"Supertrend: Price {current_price:.2f} < ST {val_st:.2f} & ADX {val_adx:.1f} > 20 & Price < EMA 200"
 
         return {
             'signal': signal,
@@ -118,6 +124,7 @@ class SignalGenerator:
             'analysis': {
                 'supertrend': val_st,
                 'adx': val_adx,
+                'ema_200': val_ema_200,
                 'strategy': 'SUPERTREND'
             }
         } if signal else None
@@ -148,6 +155,12 @@ class SignalGenerator:
         adx = ta.adx(df['high'], df['low'], df['close'], length=14)
         val_adx = adx.iloc[-1, 0] if (adx is not None and not adx.empty) else 50
 
+        # NEW: Stochastic (14, 3, 3)
+        stoch = ta.stoch(df['high'], df['low'], df['close'], k=14, d=3, smooth_k=3)
+        val_stoch_k = 50
+        if stoch is not None and not stoch.empty:
+             val_stoch_k = stoch.iloc[-1, 0]
+
         current_price = df['close'].iloc[-1]
         val_lower = lower.iloc[-1]
         val_upper = upper.iloc[-1]
@@ -157,16 +170,16 @@ class SignalGenerator:
         reason = ""
 
         # Logic:
-        # Long: Close < Lower Band AND RSI < 30 AND ADX < 25
-        # Short: Close > Upper Band AND RSI > 70 AND ADX < 25
+        # Long: Close < Lower Band AND RSI < 30 AND ADX < 25 AND Stoch K < 20
+        # Short: Close > Upper Band AND RSI > 70 AND ADX < 25 AND Stoch K > 80
 
         if val_adx < 25:
-            if current_price < val_lower and val_rsi < 30:
+            if current_price < val_lower and val_rsi < 30 and val_stoch_k < 20:
                 signal = 'CALL'
-                reason = f"BB Reversion: Price < Lower & RSI {val_rsi:.1f} < 30 & ADX {val_adx:.1f} < 25"
-            elif current_price > val_upper and val_rsi > 70:
+                reason = f"BB Reversion: Price < Lower & RSI {val_rsi:.1f} < 30 & Stoch K {val_stoch_k:.1f} < 20"
+            elif current_price > val_upper and val_rsi > 70 and val_stoch_k > 80:
                 signal = 'PUT'
-                reason = f"BB Reversion: Price > Upper & RSI {val_rsi:.1f} > 70 & ADX {val_adx:.1f} < 25"
+                reason = f"BB Reversion: Price > Upper & RSI {val_rsi:.1f} > 70 & Stoch K {val_stoch_k:.1f} > 80"
 
         return {
             'signal': signal,
@@ -177,6 +190,7 @@ class SignalGenerator:
                 'bb_lower': val_lower,
                 'rsi': val_rsi,
                 'adx': val_adx,
+                'stoch_k': val_stoch_k,
                 'strategy': 'BB_REVERSAL'
             }
         } if signal else None
@@ -197,6 +211,19 @@ class SignalGenerator:
         adx = ta.adx(df['high'], df['low'], df['close'], length=14)
         val_adx = adx.iloc[-1, 0] if (adx is not None and not adx.empty) else 0
 
+        # NEW: ADX Slope (Rising)
+        # Check current vs previous ADX
+        # Handle short dataframe edge case
+        adx_slope_rising = False
+        val_adx_prev = 0
+        if adx is not None and len(adx) >= 2:
+            val_adx_prev = adx.iloc[-2, 0]
+            adx_slope_rising = val_adx > val_adx_prev
+
+        # NEW: RSI
+        rsi = ta.rsi(df['close'], length=14)
+        val_rsi = rsi.iloc[-1] if (rsi is not None and not rsi.empty) else 50
+
         # Heikin Ashi
         ha_df = ta.ha(df['open'], df['high'], df['low'], df['close'])
         if ha_df is None or ha_df.empty:
@@ -214,23 +241,23 @@ class SignalGenerator:
         reason = ""
 
         # Logic
-        strong_trend = val_adx > 25
+        strong_trend = (val_adx > 25) & adx_slope_rising
 
-        # Long: HA Green (Close > Open) & Flat Bottom (Low == Open) & ADX > 25 & Price > EMA
+        # Long: HA Green (Close > Open) & Flat Bottom & ADX > 25 & Rising & Price > EMA & RSI < 75
         ha_green = ha_close > ha_open
         ha_flat_bottom = np.isclose(ha_low, ha_open)
 
-        # Short: HA Red (Close < Open) & Flat Top (High == Open) & ADX > 25 & Price < EMA
+        # Short: HA Red (Close < Open) & Flat Top & ADX > 25 & Rising & Price < EMA & RSI > 25
         ha_red = ha_close < ha_open
         ha_flat_top = np.isclose(ha_high, ha_open)
 
         if strong_trend:
-            if ha_green and ha_flat_bottom and current_price > val_ema:
+            if ha_green and ha_flat_bottom and current_price > val_ema and val_rsi < 75:
                 signal = 'CALL'
-                reason = f"HA Trend: Green Flat Bottom + Price > EMA + ADX {val_adx:.1f}"
-            elif ha_red and ha_flat_top and current_price < val_ema:
+                reason = f"HA Trend: Green Flat Bottom + Price > EMA + ADX {val_adx:.1f} Rising + RSI {val_rsi:.1f} < 75"
+            elif ha_red and ha_flat_top and current_price < val_ema and val_rsi > 25:
                 signal = 'PUT'
-                reason = f"HA Trend: Red Flat Top + Price < EMA + ADX {val_adx:.1f}"
+                reason = f"HA Trend: Red Flat Top + Price < EMA + ADX {val_adx:.1f} Rising + RSI {val_rsi:.1f} > 25"
 
         return {
             'signal': signal,
@@ -240,6 +267,8 @@ class SignalGenerator:
                 'ha_close': ha_close,
                 'ema': val_ema,
                 'adx': val_adx,
+                'adx_prev': val_adx_prev,
+                'rsi': val_rsi,
                 'strategy': 'TREND_HEIKIN_ASHI'
             }
         } if signal else None
@@ -275,6 +304,10 @@ class SignalGenerator:
         # We need previous candle to be in squeeze
         prev_squeeze = is_squeeze.iloc[-2]
 
+        # NEW: RSI Momentum
+        rsi = ta.rsi(df['close'], length=14)
+        val_rsi = rsi.iloc[-1] if (rsi is not None and not rsi.empty) else 50
+
         current_price = df['close'].iloc[-1]
         val_bb_upper = bb_upper.iloc[-1]
         val_bb_lower = bb_lower.iloc[-1]
@@ -283,15 +316,15 @@ class SignalGenerator:
         reason = ""
 
         # Breakout Signals
-        # Long: Previous was Squeeze AND Close > BB Upper
-        if prev_squeeze and current_price > val_bb_upper:
+        # Long: Previous was Squeeze AND Close > BB Upper AND RSI > 55
+        if prev_squeeze and current_price > val_bb_upper and val_rsi > 55:
             signal = 'CALL'
-            reason = f"Squeeze Breakout: Prev Squeeze & Price {current_price:.2f} > BB Upper {val_bb_upper:.2f}"
+            reason = f"Squeeze Breakout: Prev Squeeze & Price > BB Upper & RSI {val_rsi:.1f} > 55"
 
-        # Short: Previous was Squeeze AND Close < BB Lower
-        elif prev_squeeze and current_price < val_bb_lower:
+        # Short: Previous was Squeeze AND Close < BB Lower AND RSI < 45
+        elif prev_squeeze and current_price < val_bb_lower and val_rsi < 45:
             signal = 'PUT'
-            reason = f"Squeeze Breakout: Prev Squeeze & Price {current_price:.2f} < BB Lower {val_bb_lower:.2f}"
+            reason = f"Squeeze Breakout: Prev Squeeze & Price < BB Lower & RSI {val_rsi:.1f} < 45"
 
         return {
             'signal': signal,
@@ -301,6 +334,7 @@ class SignalGenerator:
                 'bb_upper': val_bb_upper,
                 'bb_lower': val_bb_lower,
                 'prev_squeeze': bool(prev_squeeze),
+                'rsi': val_rsi,
                 'strategy': 'BREAKOUT'
             }
         } if signal else None

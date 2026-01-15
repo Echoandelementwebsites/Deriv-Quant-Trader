@@ -51,25 +51,24 @@ class TestBacktesterMultiStrat(unittest.TestCase):
         else:
             print("No profitable strategy found (Expected for linear noise data)")
 
-    def test_eval_trend_logic(self):
+    def test_eval_trend_ha_logic(self):
         # Test specific trend logic helper
         df = pd.DataFrame({
             'close': [100, 101, 102, 103, 104, 105] * 20, # Short repeating pattern
+            'open': [99, 100, 101, 102, 103, 104] * 20,
             'high': [105] * 120,
             'low': [95] * 120
         })
 
         params = {
-            'macd_fast': 12,
-            'macd_slow': 26,
             'ema_period': 50,
             'duration': 3
         }
 
-        # We need enough data for MACD(26) and EMA(50)
+        # We need enough data for EMA(50)
         # 120 rows is enough
 
-        wins, losses, signals = self.backtester._eval_trend(df, params)
+        wins, losses, signals = self.backtester._eval_trend_ha(df, params)
 
         # Just ensure it returns integers
         self.assertIsInstance(wins, (int, np.integer))
