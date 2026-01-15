@@ -141,47 +141,97 @@ class Backtester:
         return self._calc_win_loss(df, call_signal, put_signal, duration)
 
     def _eval_trend(self, df, params):
-        # Params: macd_fast, macd_slow, ema_period, duration
-        # Default signal length 9
-        fast = params['macd_fast']
-        slow = params['macd_slow']
+        # Trend Strategy (Heikin Ashi + ADX + EMA)
+        df = df.copy() # Avoid SettingWithCopyWarning
+        # Params: ema_period, duration
         ema_p = params['ema_period']
         duration = params['duration']
 
-        macd_df = ta.macd(df['close'], fast=fast, slow=slow, signal=9)
-        # Columns: MACD_12_26_9, MACDh_12_26_9, MACDs_12_26_9
-        # Names depend on params, so we select by index or robust naming
-        if macd_df is None or macd_df.empty:
-            return 0, 0, 0
-
-        macd_line = macd_df.iloc[:, 0]
-        signal_line = macd_df.iloc[:, 2]
-
+        # 1. EMA Filter
         df['EMA'] = ta.ema(df['close'], length=ema_p)
 
-        call_signal = (macd_line > signal_line) & (df['close'] > df['EMA'])
-        put_signal = (macd_line < signal_line) & (df['close'] < df['EMA'])
+        # 2. ADX Filter (Fixed length 14, Thresh 25)
+        adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
+        if adx_df is None or adx_df.empty:
+            return 0, 0, 0
+        # Column names: ADX_14, DMP_14, DMN_14
+        df['ADX'] = adx_df.iloc[:, 0]
+
+        # 3. Heikin Ashi
+        ha_df = ta.ha(df['open'], df['high'], df['low'], df['close'])
+        if ha_df is None or ha_df.empty:
+            return 0, 0, 0
+        # Columns: HA_open, HA_high, HA_low, HA_close
+
+        # Logic:
+        # Long: HA Green (Close > Open) AND Flat Bottom (Low == Open) AND ADX > 25 AND Price > EMA
+        # Short: HA Red (Close < Open) AND Flat Top (High == Open) AND ADX > 25 AND Price < EMA
+
+        ha_green = ha_df['HA_close'] > ha_df['HA_open']
+        ha_red = ha_df['HA_close'] < ha_df['HA_open']
+
+        # Flat Bottom: Low equals Open (within tiny float tolerance or exact?)
+        # HA calculation is float, better check mostly exact or small tolerance.
+        # Using np.isclose for safety.
+        ha_flat_bottom = np.isclose(ha_df['HA_low'], ha_df['HA_open'])
+        ha_flat_top = np.isclose(ha_df['HA_high'], ha_df['HA_open'])
+
+        strong_trend = df['ADX'] > 25
+
+        call_signal = (
+            ha_green &
+            ha_flat_bottom &
+            strong_trend &
+            (df['close'] > df['EMA'])
+        )
+
+        put_signal = (
+            ha_red &
+            ha_flat_top &
+            strong_trend &
+            (df['close'] < df['EMA'])
+        )
 
         return self._calc_win_loss(df, call_signal, put_signal, duration)
 
     def _eval_breakout(self, df, params):
-        # Params: bb_length, bb_std, duration
-        length = params['bb_length']
-        std = params['bb_std']
+        # Breakout Strategy (Volatility Squeeze)
+        df = df.copy() # Avoid SettingWithCopyWarning
+        # Params: duration (Fixed BB/KC params)
         duration = params['duration']
 
-        bb = ta.bbands(df['close'], length=length, std=std)
+        # Fixed Parameters
+        bb_length = 20
+        bb_std = 2.0
+        kc_length = 20
+        kc_scalar = 1.5
+
+        # Bollinger Bands
+        bb = ta.bbands(df['close'], length=bb_length, std=bb_std)
         if bb is None or bb.empty:
              return 0, 0, 0
+        # BBL, BBM, BBU
+        bb_lower = bb.iloc[:, 0]
+        bb_upper = bb.iloc[:, 2]
 
-        # Columns: BBL, BBM, BBU, BBB, BBP
-        lower = bb.iloc[:, 0]
-        upper = bb.iloc[:, 2]
-        # bandwidth = bb.iloc[:, 3] # Check width if needed (threshold)
+        # Keltner Channels
+        kc = ta.kc(df['high'], df['low'], df['close'], length=kc_length, scalar=kc_scalar)
+        if kc is None or kc.empty:
+             return 0, 0, 0
+        # KCL, KCB, KCU (Lower, Basis, Upper)
+        kc_lower = kc.iloc[:, 0]
+        kc_upper = kc.iloc[:, 2]
 
-        # Simple breakout: Close outside bands
-        call_signal = df['close'] > upper
-        put_signal = df['close'] < lower
+        # Squeeze: BB inside KC
+        is_squeeze = (bb_upper < kc_upper) & (bb_lower > kc_lower)
+        prev_squeeze = is_squeeze.shift(1).fillna(False)
+
+        # Breakout Signals
+        # Long: Previous was Squeeze AND Close > BB Upper
+        call_signal = prev_squeeze & (df['close'] > bb_upper)
+
+        # Short: Previous was Squeeze AND Close < BB Lower
+        put_signal = prev_squeeze & (df['close'] < bb_lower)
 
         return self._calc_win_loss(df, call_signal, put_signal, duration)
 
@@ -200,7 +250,7 @@ class Backtester:
 
         return total_wins, total_losses, total_signals
 
-    def run_wfa_optimization(self, df):
+    def run_wfa_optimization(self, df, symbol=""):
         """
         Rolling Walk-Forward Analysis:
         Slide a training window over the data, test on the subsequent small window.
@@ -214,24 +264,28 @@ class Backtester:
             logger.info(f"Not enough data for Rolling WFA. Needed {TRAIN_SIZE+TEST_SIZE}, got {len(df)}")
             return None
 
+        # Determine Payout Ratio
+        avg_win_payout = 0.85
+        if 'R_' in symbol or '1HZ' in symbol:
+            avg_win_payout = 0.94
+
         # Strategy Grids
+        # Expanded durations: [1, 2, 3, 5, 10, 15] for ALL
         strategies = {
             'REVERSAL': {
                 'rsi_period': [7, 14],
                 'ema_period': [100, 200],
                 'rsi_vol_window': [50, 100],
-                'duration': [3, 5]
+                'duration': [1, 2, 3, 5, 10, 15]
             },
             'TREND': {
-                'macd_fast': [12],
-                'macd_slow': [26],
-                'ema_period': [50, 100],
-                'duration': [5, 10, 15]
+                # Trend uses EMA period. Fixed ADX=14.
+                'ema_period': [50, 100, 200],
+                'duration': [1, 2, 3, 5, 10, 15]
             },
             'BREAKOUT': {
-                'bb_length': [20],
-                'bb_std': [2.0, 2.5],
-                'duration': [3, 5]
+                # Breakout has fixed BB/KC params. Only Duration optimized.
+                'duration': [1, 2, 3, 5, 10, 15]
             }
         }
 
@@ -281,7 +335,7 @@ class Backtester:
 
                     if signals < 3: continue
 
-                    ev = self.calculate_expectancy(wins, losses)
+                    ev = self.calculate_expectancy(wins, losses, avg_win_payout=avg_win_payout)
                     if ev > best_local_ev:
                         best_local_ev = ev
                         best_local_config = params
@@ -303,7 +357,7 @@ class Backtester:
             # Evaluate System Performance for this Strategy Type
             total_wins = agg_results['wins']
             total_losses = agg_results['losses']
-            system_ev = self.calculate_expectancy(total_wins, total_losses)
+            system_ev = self.calculate_expectancy(total_wins, total_losses, avg_win_payout=avg_win_payout)
 
             if system_ev > best_system_ev and len(agg_results['configs']) > 0:
                 best_system_ev = system_ev
@@ -395,7 +449,7 @@ class Backtester:
                     continue
 
                 # 2. Run WFA
-                best = self.run_wfa_optimization(df)
+                best = self.run_wfa_optimization(df, symbol=symbol)
 
                 # 3. Save
                 if best:
