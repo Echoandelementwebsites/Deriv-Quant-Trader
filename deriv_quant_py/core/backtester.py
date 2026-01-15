@@ -10,6 +10,7 @@ import asyncio
 import logging
 import numpy as np
 import json
+import itertools
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,7 @@ class Backtester:
         return ev
 
     def _eval_reversal(self, df, params):
+        # Legacy: Dynamic RSI + CHOP
         # Params: rsi_period, ema_period, rsi_vol_window, duration
         rsi_p = params['rsi_period']
         ema_p = params['ema_period']
@@ -140,7 +142,7 @@ class Backtester:
         )
         return self._calc_win_loss(df, call_signal, put_signal, duration)
 
-    def _eval_trend(self, df, params):
+    def _eval_trend_ha(self, df, params):
         # Trend Strategy (Heikin Ashi + ADX + EMA)
         df = df.copy() # Avoid SettingWithCopyWarning
         # Params: ema_period, duration
@@ -171,7 +173,6 @@ class Backtester:
         ha_red = ha_df['HA_close'] < ha_df['HA_open']
 
         # Flat Bottom: Low equals Open (within tiny float tolerance or exact?)
-        # HA calculation is float, better check mostly exact or small tolerance.
         # Using np.isclose for safety.
         ha_flat_bottom = np.isclose(ha_df['HA_low'], ha_df['HA_open'])
         ha_flat_top = np.isclose(ha_df['HA_high'], ha_df['HA_open'])
@@ -235,6 +236,74 @@ class Backtester:
 
         return self._calc_win_loss(df, call_signal, put_signal, duration)
 
+    def _eval_supertrend(self, df, params):
+        # Supertrend (ATR Trailing Stop)
+        df = df.copy()
+        # Params: length, multiplier, duration
+        length = params['length']
+        multiplier = params['multiplier']
+        duration = params['duration']
+
+        # Supertrend
+        st = ta.supertrend(df['high'], df['low'], df['close'], length=length, multiplier=multiplier)
+        if st is None or st.empty:
+            return 0, 0, 0
+
+        # Identify Supertrend Line Column (usually first column)
+        st_line = st.iloc[:, 0]
+
+        # ADX Filter > 20
+        adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
+        if adx_df is None or adx_df.empty:
+            return 0, 0, 0
+        adx = adx_df.iloc[:, 0]
+
+        # Logic:
+        # Long: Close > Supertrend Line AND ADX > 20
+        # Short: Close < Supertrend Line AND ADX > 20
+
+        trend_filter = adx > 20
+
+        call_signal = (df['close'] > st_line) & trend_filter
+        put_signal = (df['close'] < st_line) & trend_filter
+
+        return self._calc_win_loss(df, call_signal, put_signal, duration)
+
+    def _eval_bb_reversal(self, df, params):
+        # BB Mean Reversion
+        df = df.copy()
+        # Params: bb_length, bb_std, rsi_period, duration
+        bb_length = params['bb_length']
+        bb_std = params['bb_std']
+        rsi_period = params['rsi_period']
+        duration = params['duration']
+
+        # BB
+        bb = ta.bbands(df['close'], length=bb_length, std=bb_std)
+        if bb is None or bb.empty: return 0, 0, 0
+        lower = bb.iloc[:, 0]
+        upper = bb.iloc[:, 2]
+
+        # RSI
+        rsi = ta.rsi(df['close'], length=rsi_period)
+        if rsi is None or rsi.empty: return 0, 0, 0
+
+        # ADX Filter < 25 (Not trending)
+        adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
+        if adx_df is None or adx_df.empty: return 0, 0, 0
+        adx = adx_df.iloc[:, 0]
+
+        range_filter = adx < 25
+
+        # Logic
+        # Long: Close < Lower & RSI < 30
+        # Short: Close > Upper & RSI > 70
+
+        call_signal = (df['close'] < lower) & (rsi < 30) & range_filter
+        put_signal = (df['close'] > upper) & (rsi > 70) & range_filter
+
+        return self._calc_win_loss(df, call_signal, put_signal, duration)
+
     def _calc_win_loss(self, df, call_signal, put_signal, duration):
         future_close = df['close'].shift(-duration)
 
@@ -249,6 +318,23 @@ class Backtester:
         total_signals = call_signal.sum() + put_signal.sum()
 
         return total_wins, total_losses, total_signals
+
+    def get_strategy_candidates(self, symbol):
+        """Returns list of strategy types to test based on asset class."""
+
+        # 1. Forex & OTC (Mean Reversion Focus)
+        if symbol.startswith('frx') or symbol.startswith('OTC_'):
+            return ['BB_REVERSAL'] # Could also include legacy REVERSAL if desired
+
+        # 2. Step, Jump, Reset, Synthetics (Trend Focus)
+        # symbol.startswith('R_') includes R_10, R_100 etc.
+        # symbol.startswith('1HZ') includes 1HZ10V etc.
+        elif (any(symbol.startswith(x) for x in ['stp', 'JD', 'RDBULL', 'RDBEAR', 'R_', '1HZ', 'CRASH', 'BOOM'])):
+            return ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT']
+
+        # Default (Try everything for others)
+        else:
+            return ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'BB_REVERSAL']
 
     def run_wfa_optimization(self, df, symbol=""):
         """
@@ -269,44 +355,60 @@ class Backtester:
         if 'R_' in symbol or '1HZ' in symbol:
             avg_win_payout = 0.94
 
+        # Define Duration Lists
+        # Constraint: Force durations to be small for 1HZ assets: [1, 2]
+        if '1HZ' in symbol:
+            durations = [1, 2]
+        else:
+            durations = [1, 2, 3, 5, 10, 15]
+
+        # Define Multiplier Lists for Supertrend
+        # Constraint: Ensure 4.0 is tested for JD assets
+        if 'JD' in symbol:
+            st_multipliers = [2.0, 3.0, 4.0]
+        else:
+            st_multipliers = [2.0, 3.0] # Default
+
         # Strategy Grids
-        # Expanded durations: [1, 2, 3, 5, 10, 15] for ALL
         strategies = {
-            'REVERSAL': {
+            'BB_REVERSAL': {
+                'bb_length': [20],
+                'bb_std': [2.0, 2.5],
                 'rsi_period': [7, 14],
-                'ema_period': [100, 200],
-                'rsi_vol_window': [50, 100],
-                'duration': [1, 2, 3, 5, 10, 15]
+                'duration': durations
             },
-            'TREND': {
-                # Trend uses EMA period. Fixed ADX=14.
+            'SUPERTREND': {
+                'length': [7, 10, 14],
+                'multiplier': st_multipliers,
+                'duration': durations
+            },
+            'TREND_HEIKIN_ASHI': {
                 'ema_period': [50, 100, 200],
-                'duration': [1, 2, 3, 5, 10, 15]
+                'duration': durations
             },
             'BREAKOUT': {
-                # Breakout has fixed BB/KC params. Only Duration optimized.
-                'duration': [1, 2, 3, 5, 10, 15]
-            }
+                'duration': durations
+            },
+            # Legacy REVERSAL (kept if needed, or we can omit it if BB_REVERSAL supersedes it)
+            # Keeping it out of the main loop for now unless requested to fallback.
         }
 
+        candidates = self.get_strategy_candidates(symbol)
+
         # Generate parameter combinations helper
-        import itertools
         def get_combinations(grid):
             keys = grid.keys()
             values = grid.values()
             return [dict(zip(keys, v)) for v in itertools.product(*values)]
 
-        # Aggregate Results: best strategy type & params
-        # We need to pick the best strategy type GLOBALLY across the WFA or per window?
-        # Usually WFA simulates a system that can switch.
-        # But here the user wants to find "The best strategy for this asset".
-        # So we should probably optimize each strategy type independently via WFA,
-        # then compare their final System Performance.
-
         best_system_result = None
         best_system_ev = -100
 
-        for strat_type, grid in strategies.items():
+        for strat_type in candidates:
+            if strat_type not in strategies:
+                continue
+
+            grid = strategies[strat_type]
             param_combos = get_combinations(grid)
 
             # Run WFA for this strategy type
@@ -326,10 +428,14 @@ class Backtester:
                 best_local_ev = -100
 
                 for params in param_combos:
-                    if strat_type == 'REVERSAL':
-                        wins, losses, signals = self._eval_reversal(train_df, params)
-                    elif strat_type == 'TREND':
-                        wins, losses, signals = self._eval_trend(train_df, params)
+                    wins, losses, signals = 0, 0, 0
+
+                    if strat_type == 'BB_REVERSAL':
+                        wins, losses, signals = self._eval_bb_reversal(train_df, params)
+                    elif strat_type == 'SUPERTREND':
+                        wins, losses, signals = self._eval_supertrend(train_df, params)
+                    elif strat_type == 'TREND_HEIKIN_ASHI':
+                        wins, losses, signals = self._eval_trend_ha(train_df, params)
                     elif strat_type == 'BREAKOUT':
                         wins, losses, signals = self._eval_breakout(train_df, params)
 
@@ -342,10 +448,14 @@ class Backtester:
 
                 # 2. Verify on Test
                 if best_local_config:
-                    if strat_type == 'REVERSAL':
-                        v_wins, v_losses, v_signals = self._eval_reversal(test_df, best_local_config)
-                    elif strat_type == 'TREND':
-                        v_wins, v_losses, v_signals = self._eval_trend(test_df, best_local_config)
+                    v_wins, v_losses, v_signals = 0, 0, 0
+
+                    if strat_type == 'BB_REVERSAL':
+                        v_wins, v_losses, v_signals = self._eval_bb_reversal(test_df, best_local_config)
+                    elif strat_type == 'SUPERTREND':
+                        v_wins, v_losses, v_signals = self._eval_supertrend(test_df, best_local_config)
+                    elif strat_type == 'TREND_HEIKIN_ASHI':
+                        v_wins, v_losses, v_signals = self._eval_trend_ha(test_df, best_local_config)
                     elif strat_type == 'BREAKOUT':
                         v_wins, v_losses, v_signals = self._eval_breakout(test_df, best_local_config)
 
@@ -400,18 +510,14 @@ class Backtester:
 
             # Legacy fields (for backward compatibility if possible, or just set defaults)
             # Some UI components might still read rsi_period/ema_period directly.
-            # We map REVERSAL params if available.
+            # We map params if available.
             config = result['config']
-            if result['strategy_type'] == 'REVERSAL':
-                existing.rsi_period = int(config.get('rsi_period', 14))
-                existing.ema_period = int(config.get('ema_period', 200))
-                existing.rsi_vol_window = int(config.get('rsi_vol_window', 100))
-            else:
-                # For Trend/Breakout, maybe set to 0 or keep last value to indicate "Not used"
-                # Or set to defaults to avoid NULLs if code expects integers
-                existing.rsi_period = 0
-                existing.ema_period = int(config.get('ema_period', 0)) # Trend uses ema_period
-                existing.rsi_vol_window = 0
+
+            # Map common fields if they exist, else 0
+            existing.rsi_period = int(config.get('rsi_period', 0))
+            existing.ema_period = int(config.get('ema_period', 0))
+            # rsi_vol_window is from legacy Reversal, not used in new strategies
+            existing.rsi_vol_window = int(config.get('rsi_vol_window', 0))
 
             session.commit()
             logger.info(f"Saved optimized config for {symbol} ({existing.strategy_type}): Dur={existing.optimal_duration}m EV={result.get('Expectancy',0):.2f}")
