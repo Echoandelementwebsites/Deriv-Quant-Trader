@@ -146,7 +146,7 @@ class Backtester:
         # Trend Strategy (Heikin Ashi + ADX + EMA)
         df = df.copy() # Avoid SettingWithCopyWarning
         # Params: ema_period, duration
-        ema_p = params['ema_period']
+        ema_p = int(params.get('ema_period', 50))
         duration = params['duration']
 
         # 1. EMA Filter
@@ -158,6 +158,13 @@ class Backtester:
             return 0, 0, 0
         # Column names: ADX_14, DMP_14, DMN_14
         df['ADX'] = adx_df.iloc[:, 0]
+
+        # NEW: ADX Slope (Rising)
+        df['ADX_Prev'] = df['ADX'].shift(1)
+        adx_rising = df['ADX'] > df['ADX_Prev']
+
+        # NEW: RSI Check (Avoid Exhaustion)
+        df['RSI'] = ta.rsi(df['close'], length=14)
 
         # 3. Heikin Ashi
         ha_df = ta.ha(df['open'], df['high'], df['low'], df['close'])
@@ -177,20 +184,22 @@ class Backtester:
         ha_flat_bottom = np.isclose(ha_df['HA_low'], ha_df['HA_open'])
         ha_flat_top = np.isclose(ha_df['HA_high'], ha_df['HA_open'])
 
-        strong_trend = df['ADX'] > 25
+        strong_trend = (df['ADX'] > 25) & adx_rising
 
         call_signal = (
             ha_green &
             ha_flat_bottom &
             strong_trend &
-            (df['close'] > df['EMA'])
+            (df['close'] > df['EMA']) &
+            (df['RSI'] < 75)
         )
 
         put_signal = (
             ha_red &
             ha_flat_top &
             strong_trend &
-            (df['close'] < df['EMA'])
+            (df['close'] < df['EMA']) &
+            (df['RSI'] > 25)
         )
 
         return self._calc_win_loss(df, call_signal, put_signal, duration)
@@ -227,12 +236,15 @@ class Backtester:
         is_squeeze = (bb_upper < kc_upper) & (bb_lower > kc_lower)
         prev_squeeze = is_squeeze.shift(1).fillna(False)
 
-        # Breakout Signals
-        # Long: Previous was Squeeze AND Close > BB Upper
-        call_signal = prev_squeeze & (df['close'] > bb_upper)
+        # NEW: RSI Momentum
+        rsi = ta.rsi(df['close'], length=14)
 
-        # Short: Previous was Squeeze AND Close < BB Lower
-        put_signal = prev_squeeze & (df['close'] < bb_lower)
+        # Breakout Signals
+        # Long: Breakout + RSI > 55 (Strong Momentum)
+        call_signal = prev_squeeze & (df['close'] > bb_upper) & (rsi > 55)
+
+        # Short: Breakout + RSI < 45 (Strong Momentum)
+        put_signal = prev_squeeze & (df['close'] < bb_lower) & (rsi < 45)
 
         return self._calc_win_loss(df, call_signal, put_signal, duration)
 
@@ -264,8 +276,14 @@ class Backtester:
 
         trend_filter = adx > 20
 
-        call_signal = (df['close'] > st_line) & trend_filter
-        put_signal = (df['close'] < st_line) & trend_filter
+        # NEW: Major Trend Filter (EMA 200)
+        # Even if not optimizing EMA, we calculate a fixed long-term EMA
+        ema_200 = ta.ema(df['close'], length=200)
+        # Handle beginning of data where EMA is NaN
+        ema_200 = ema_200.fillna(df['close'])
+
+        call_signal = (df['close'] > st_line) & trend_filter & (df['close'] > ema_200)
+        put_signal = (df['close'] < st_line) & trend_filter & (df['close'] < ema_200)
 
         return self._calc_win_loss(df, call_signal, put_signal, duration)
 
@@ -293,14 +311,20 @@ class Backtester:
         if adx_df is None or adx_df.empty: return 0, 0, 0
         adx = adx_df.iloc[:, 0]
 
+        # NEW: Stochastic Oscillator (14, 3, 3)
+        stoch = ta.stoch(df['high'], df['low'], df['close'], k=14, d=3, smooth_k=3)
+        if stoch is None or stoch.empty: return 0, 0, 0
+        # Columns: STOCHk_14_3_3, STOCHd_14_3_3
+        stoch_k = stoch.iloc[:, 0]
+
         range_filter = adx < 25
 
         # Logic
-        # Long: Close < Lower & RSI < 30
-        # Short: Close > Upper & RSI > 70
+        # Buy: Close < Lower & RSI < 30 & Stoch_K < 20
+        call_signal = (df['close'] < lower) & (rsi < 30) & (stoch_k < 20) & range_filter
 
-        call_signal = (df['close'] < lower) & (rsi < 30) & range_filter
-        put_signal = (df['close'] > upper) & (rsi > 70) & range_filter
+        # Sell: Close > Upper & RSI > 70 & Stoch_K > 80
+        put_signal = (df['close'] > upper) & (rsi > 70) & (stoch_k > 80) & range_filter
 
         return self._calc_win_loss(df, call_signal, put_signal, duration)
 
@@ -322,9 +346,11 @@ class Backtester:
     def get_strategy_candidates(self, symbol):
         """Returns list of strategy types to test based on asset class."""
 
-        # 1. Forex & OTC (Mean Reversion Focus)
+        # 1. Forex & OTC
+        # UPDATED: Added TREND_HEIKIN_ASHI and BREAKOUT.
+        # Markets trend too often to rely solely on Mean Reversion.
         if symbol.startswith('frx') or symbol.startswith('OTC_'):
-            return ['BB_REVERSAL'] # Could also include legacy REVERSAL if desired
+            return ['BB_REVERSAL', 'TREND_HEIKIN_ASHI', 'BREAKOUT']
 
         # 2. Step, Jump, Reset, Synthetics (Trend Focus)
         # symbol.startswith('R_') includes R_10, R_100 etc.
