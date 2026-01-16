@@ -79,7 +79,7 @@ class TradingEngine:
         req = {
             "ticks_history": symbol,
             "adjust_start_time": 1,
-            "count": Config.EMA_PERIOD + 20,
+            "count": 3500, # Increased for MTF Trend Strategy
             "end": "latest",
             "start": 1,
             "style": "candles",

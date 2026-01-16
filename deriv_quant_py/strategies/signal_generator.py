@@ -54,21 +54,41 @@ class SignalGenerator:
 
         # Dispatch
         if strategy_type == 'SUPERTREND':
-            return self._analyze_supertrend(df, config)
+            result = self._analyze_supertrend(df, config)
         elif strategy_type == 'BB_REVERSAL':
-            return self._analyze_bb_reversal(df, config)
+            result = self._analyze_bb_reversal(df, config)
         elif strategy_type == 'TREND_HEIKIN_ASHI':
-            return self._analyze_trend_ha(df, config)
+            result = self._analyze_trend_ha(df, config)
         elif strategy_type == 'BREAKOUT':
-            return self._analyze_breakout(df, config)
+            result = self._analyze_breakout(df, config)
         elif strategy_type == 'ICHIMOKU':
-            return self._analyze_ichimoku(df, config)
+            result = self._analyze_ichimoku(df, config)
         elif strategy_type == 'EMA_CROSS':
-            return self._analyze_ema_cross(df, config)
+            result = self._analyze_ema_cross(df, config)
+        elif strategy_type == 'PARABOLIC_SAR':
+            result = self._analyze_psar(df, config)
+        elif strategy_type == 'EMA_PULLBACK':
+            result = self._analyze_ema_pullback(df, config)
+        elif strategy_type == 'MTF_TREND':
+            result = self._analyze_mtf_trend(df, config)
         elif strategy_type == 'TREND': # Legacy MACD
-            return self._analyze_trend(df, config)
+            result = self._analyze_trend(df, config)
         else: # Default/Legacy REVERSAL
-            return self._analyze_reversal(df, config)
+            result = self._analyze_reversal(df, config)
+
+        # SAFETY LAYER: Crash/Boom/Reset Filter
+        if result and result['signal']:
+            symbol = params.get('symbol', '')
+
+            # Reject Puts on Bullish Assets
+            if ('CRASH' in symbol or 'RDBULL' in symbol) and result['signal'] == 'PUT':
+                return None
+
+            # Reject Calls on Bearish Assets
+            if ('BOOM' in symbol or 'RDBEAR' in symbol) and result['signal'] == 'CALL':
+                return None
+
+        return result
 
     def _analyze_supertrend(self, df, config):
         # Concept: ATR Trailing Stop.
@@ -594,5 +614,159 @@ class SignalGenerator:
                 'macd_signal': signal_val,
                 'ema': val_ema,
                 'strategy': 'TREND'
+            }
+        } if signal else None
+
+    def _analyze_psar(self, df, config):
+        # Parabolic SAR for Step/Jump
+        # Params: af, max_af, adx_threshold
+        af = float(config.get('af', 0.02))
+        max_af = float(config.get('max_af', 0.2))
+        adx_thresh = int(config.get('adx_threshold', 20))
+
+        if len(df) < 50: # PSAR needs some history to stabilize
+            return None
+
+        # PSAR
+        psar = ta.psar(df['high'], df['low'], df['close'], af0=af, af=af, max_af=max_af)
+        if psar is None: return None
+        # Coalesce
+        psar_combined = psar.iloc[:, 0].fillna(psar.iloc[:, 1])
+
+        # ADX
+        adx = ta.adx(df['high'], df['low'], df['close'], length=14)
+        val_adx = adx.iloc[-1, 0] if (adx is not None and not adx.empty) else 0
+
+        trend_ok = val_adx > adx_thresh
+
+        current_price = df['close'].iloc[-1]
+        val_psar = psar_combined.iloc[-1]
+
+        signal = None
+        reason = ""
+
+        if trend_ok:
+            if current_price > val_psar:
+                signal = 'CALL'
+                reason = f"PSAR: Price {current_price:.2f} > SAR {val_psar:.2f} & ADX {val_adx:.1f} > {adx_thresh}"
+            elif current_price < val_psar:
+                signal = 'PUT'
+                reason = f"PSAR: Price {current_price:.2f} < SAR {val_psar:.2f} & ADX {val_adx:.1f} > {adx_thresh}"
+
+        return {
+            'signal': signal,
+            'reason': reason,
+            'price': current_price,
+            'analysis': {
+                'psar': val_psar,
+                'adx': val_adx,
+                'strategy': 'PARABOLIC_SAR'
+            }
+        } if signal else None
+
+    def _analyze_ema_pullback(self, df, config):
+        # EMA Pullback
+        # Params: ema_trend, ema_pullback, rsi_limit
+        ema_t_len = int(config.get('ema_trend', 200))
+        ema_p_len = int(config.get('ema_pullback', 50))
+        rsi_lim = int(config.get('rsi_limit', 60))
+
+        if len(df) < max(ema_t_len, ema_p_len) + 5:
+            return None
+
+        ema_t = ta.ema(df['close'], length=ema_t_len)
+        ema_p = ta.ema(df['close'], length=ema_p_len)
+        rsi = ta.rsi(df['close'], length=14)
+
+        if ema_t is None or ema_p is None or rsi is None: return None
+
+        val_ema_t = ema_t.iloc[-1]
+        val_ema_p = ema_p.iloc[-1]
+        val_rsi = rsi.iloc[-1]
+
+        current_price = df['close'].iloc[-1]
+        current_open = df['open'].iloc[-1]
+        current_low = df['low'].iloc[-1]
+        current_high = df['high'].iloc[-1]
+
+        signal = None
+        reason = ""
+
+        # Long: Trend Up, Touched Pullback, Bounce Up, RSI Safe
+        trend_up = current_price > val_ema_t
+        touched_support = current_low <= val_ema_p
+        bounce_up = (current_price > current_open) and (current_price > val_ema_p)
+        safe_rsi = val_rsi < rsi_lim
+
+        if trend_up and touched_support and bounce_up and safe_rsi:
+            signal = 'CALL'
+            reason = f"EMA Pullback: Bounce off EMA({ema_p_len}) in Uptrend + RSI Safe"
+
+        # Short: Trend Down, Touched Resist, Bounce Down, RSI Safe
+        trend_down = current_price < val_ema_t
+        touched_resist = current_high >= val_ema_p
+        bounce_down = (current_price < current_open) and (current_price < val_ema_p)
+        safe_rsi_short = val_rsi > (100 - rsi_lim)
+
+        if trend_down and touched_resist and bounce_down and safe_rsi_short:
+            signal = 'PUT'
+            reason = f"EMA Pullback: Bounce off EMA({ema_p_len}) in Downtrend + RSI Safe"
+
+        return {
+            'signal': signal,
+            'reason': reason,
+            'price': current_price,
+            'analysis': {
+                'ema_trend': val_ema_t,
+                'ema_pullback': val_ema_p,
+                'rsi': val_rsi,
+                'strategy': 'EMA_PULLBACK'
+            }
+        } if signal else None
+
+    def _analyze_mtf_trend(self, df, config):
+        # MTF Trend
+        # Params: mtf_ema, local_ema
+        mtf_len = int(config.get('mtf_ema', 1000))
+        local_len = int(config.get('local_ema', 50))
+
+        if len(df) < max(mtf_len, local_len) + 5:
+            # Not enough history
+            return None
+
+        ema_mtf = ta.ema(df['close'], length=mtf_len)
+        ema_local = ta.ema(df['close'], length=local_len)
+        rsi = ta.rsi(df['close'], length=14)
+
+        if ema_mtf is None or ema_local is None or rsi is None: return None
+
+        val_mtf = ema_mtf.iloc[-1]
+        val_local = ema_local.iloc[-1]
+        val_rsi = rsi.iloc[-1]
+
+        current_price = df['close'].iloc[-1]
+
+        signal = None
+        reason = ""
+
+        # Long
+        if current_price > val_mtf and current_price > val_local and val_rsi > 50:
+            signal = 'CALL'
+            reason = f"MTF Trend: Price > EMA({mtf_len}) & EMA({local_len}) & RSI > 50"
+
+        # Short
+        elif current_price < val_mtf and current_price < val_local and val_rsi < 50:
+            signal = 'PUT'
+            reason = f"MTF Trend: Price < EMA({mtf_len}) & EMA({local_len}) & RSI < 50"
+
+        return {
+            'signal': signal,
+            'reason': reason,
+            'price': current_price,
+            'analysis': {
+                'ema_mtf': val_mtf,
+                'ema_local': val_local,
+                'rsi': val_rsi,
+                'strategy': 'MTF_TREND'
             }
         } if signal else None
