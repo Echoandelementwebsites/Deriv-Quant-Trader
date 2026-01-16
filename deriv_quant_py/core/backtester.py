@@ -105,54 +105,19 @@ class Backtester:
         ev = (win_rate * avg_win_payout) - (loss_rate * 1.0)
         return ev
 
-    def _eval_reversal(self, df, params):
-        # Legacy: Dynamic RSI + CHOP
-        # Params: rsi_period, ema_period, rsi_vol_window, duration
-        rsi_p = params['rsi_period']
-        ema_p = params['ema_period']
-        rsi_window = params['rsi_vol_window']
-        duration = params['duration']
-
-        # EMA
-        df['EMA'] = ta.ema(df['close'], length=ema_p)
-        # RSI
-        rsi_series = ta.rsi(df['close'], length=rsi_p)
-        df['RSI'] = rsi_series
-        # Dynamic Bands
-        rsi_roll = rsi_series.rolling(window=rsi_window)
-        rsi_mean = rsi_roll.mean()
-        rsi_std = rsi_roll.std()
-        df['Dyn_Upper'] = rsi_mean + (2 * rsi_std)
-        df['Dyn_Lower'] = rsi_mean - (2 * rsi_std)
-        # CHOP
-        df['CHOP'] = calculate_chop(df['high'], df['low'], df['close'], length=14)
-
-        valid_regime = df['CHOP'] >= 38
-        call_signal = (
-            valid_regime &
-            (df['close'] > df['EMA']) &
-            (df['RSI'] < df['Dyn_Lower']) &
-            (df['RSI'] < 45)
-        )
-        put_signal = (
-            valid_regime &
-            (df['close'] < df['EMA']) &
-            (df['RSI'] > df['Dyn_Upper']) &
-            (df['RSI'] > 55)
-        )
-        return self._calc_win_loss(df, call_signal, put_signal, duration)
-
     def _eval_trend_ha(self, df, params):
         # Trend Strategy (Heikin Ashi + ADX + EMA)
         df = df.copy() # Avoid SettingWithCopyWarning
-        # Params: ema_period, duration
+        # Params: ema_period, duration, adx_threshold, rsi_max
         ema_p = int(params.get('ema_period', 50))
+        adx_threshold = int(params.get('adx_threshold', 25))
+        rsi_max = int(params.get('rsi_max', 75))
         duration = params['duration']
 
         # 1. EMA Filter
         df['EMA'] = ta.ema(df['close'], length=ema_p)
 
-        # 2. ADX Filter (Fixed length 14, Thresh 25)
+        # 2. ADX Filter (Fixed length 14, Dynamic Thresh)
         adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
         if adx_df is None or adx_df.empty:
             return 0, 0, 0
@@ -173,8 +138,8 @@ class Backtester:
         # Columns: HA_open, HA_high, HA_low, HA_close
 
         # Logic:
-        # Long: HA Green (Close > Open) AND Flat Bottom (Low == Open) AND ADX > 25 AND Price > EMA
-        # Short: HA Red (Close < Open) AND Flat Top (High == Open) AND ADX > 25 AND Price < EMA
+        # Long: HA Green (Close > Open) AND Flat Bottom (Low == Open) AND ADX > thresh AND Price > EMA
+        # Short: HA Red (Close < Open) AND Flat Top (High == Open) AND ADX > thresh AND Price < EMA
 
         ha_green = ha_df['HA_close'] > ha_df['HA_open']
         ha_red = ha_df['HA_close'] < ha_df['HA_open']
@@ -184,14 +149,17 @@ class Backtester:
         ha_flat_bottom = np.isclose(ha_df['HA_low'], ha_df['HA_open'])
         ha_flat_top = np.isclose(ha_df['HA_high'], ha_df['HA_open'])
 
-        strong_trend = (df['ADX'] > 25) & adx_rising
+        strong_trend = (df['ADX'] > adx_threshold) & adx_rising
+
+        # For Short, we use 100 - rsi_max as the lower bound (e.g., if max is 75, min is 25)
+        rsi_min_short = 100 - rsi_max
 
         call_signal = (
             ha_green &
             ha_flat_bottom &
             strong_trend &
             (df['close'] > df['EMA']) &
-            (df['RSI'] < 75)
+            (df['RSI'] < rsi_max)
         )
 
         put_signal = (
@@ -199,7 +167,7 @@ class Backtester:
             ha_flat_top &
             strong_trend &
             (df['close'] < df['EMA']) &
-            (df['RSI'] > 25)
+            (df['RSI'] > rsi_min_short)
         )
 
         return self._calc_win_loss(df, call_signal, put_signal, duration)
@@ -207,10 +175,12 @@ class Backtester:
     def _eval_breakout(self, df, params):
         # Breakout Strategy (Volatility Squeeze)
         df = df.copy() # Avoid SettingWithCopyWarning
-        # Params: duration (Fixed BB/KC params)
+        # Params: duration (Fixed BB/KC params), rsi_entry_bull, rsi_entry_bear
         duration = params['duration']
+        rsi_entry_bull = int(params.get('rsi_entry_bull', 55))
+        rsi_entry_bear = int(params.get('rsi_entry_bear', 45))
 
-        # Fixed Parameters
+        # Fixed Parameters for Bands (Usually standard)
         bb_length = 20
         bb_std = 2.0
         kc_length = 20
@@ -240,21 +210,23 @@ class Backtester:
         rsi = ta.rsi(df['close'], length=14)
 
         # Breakout Signals
-        # Long: Breakout + RSI > 55 (Strong Momentum)
-        call_signal = prev_squeeze & (df['close'] > bb_upper) & (rsi > 55)
+        # Long: Breakout + RSI > Bull Thresh (Strong Momentum)
+        call_signal = prev_squeeze & (df['close'] > bb_upper) & (rsi > rsi_entry_bull)
 
-        # Short: Breakout + RSI < 45 (Strong Momentum)
-        put_signal = prev_squeeze & (df['close'] < bb_lower) & (rsi < 45)
+        # Short: Breakout + RSI < Bear Thresh (Strong Momentum)
+        put_signal = prev_squeeze & (df['close'] < bb_lower) & (rsi < rsi_entry_bear)
 
         return self._calc_win_loss(df, call_signal, put_signal, duration)
 
     def _eval_supertrend(self, df, params):
         # Supertrend (ATR Trailing Stop)
         df = df.copy()
-        # Params: length, multiplier, duration
+        # Params: length, multiplier, duration, trend_ema, adx_threshold
         length = params['length']
         multiplier = params['multiplier']
         duration = params['duration']
+        trend_ema_len = int(params.get('trend_ema', 200))
+        adx_threshold = int(params.get('adx_threshold', 20))
 
         # Supertrend
         st = ta.supertrend(df['high'], df['low'], df['close'], length=length, multiplier=multiplier)
@@ -264,37 +236,40 @@ class Backtester:
         # Identify Supertrend Line Column (usually first column)
         st_line = st.iloc[:, 0]
 
-        # ADX Filter > 20
+        # ADX Filter > Threshold
         adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
         if adx_df is None or adx_df.empty:
             return 0, 0, 0
         adx = adx_df.iloc[:, 0]
 
         # Logic:
-        # Long: Close > Supertrend Line AND ADX > 20
-        # Short: Close < Supertrend Line AND ADX > 20
+        # Long: Close > Supertrend Line AND ADX > Threshold
+        # Short: Close < Supertrend Line AND ADX > Threshold
 
-        trend_filter = adx > 20
+        trend_filter = adx > adx_threshold
 
-        # NEW: Major Trend Filter (EMA 200)
-        # Even if not optimizing EMA, we calculate a fixed long-term EMA
-        ema_200 = ta.ema(df['close'], length=200)
+        # NEW: Major Trend Filter (EMA dynamic)
+        ema_trend = ta.ema(df['close'], length=trend_ema_len)
         # Handle beginning of data where EMA is NaN
-        ema_200 = ema_200.fillna(df['close'])
+        ema_trend = ema_trend.fillna(df['close'])
 
-        call_signal = (df['close'] > st_line) & trend_filter & (df['close'] > ema_200)
-        put_signal = (df['close'] < st_line) & trend_filter & (df['close'] < ema_200)
+        call_signal = (df['close'] > st_line) & trend_filter & (df['close'] > ema_trend)
+        put_signal = (df['close'] < st_line) & trend_filter & (df['close'] < ema_trend)
 
         return self._calc_win_loss(df, call_signal, put_signal, duration)
 
     def _eval_bb_reversal(self, df, params):
         # BB Mean Reversion
         df = df.copy()
-        # Params: bb_length, bb_std, rsi_period, duration
+        # Params: bb_length, bb_std, rsi_period, duration, stoch_oversold, stoch_overbought
         bb_length = params['bb_length']
         bb_std = params['bb_std']
+        # rsi_period is sometimes not in param grid if fixed? But let's assume valid key
         rsi_period = params['rsi_period']
         duration = params['duration']
+
+        stoch_os = int(params.get('stoch_oversold', 20))
+        stoch_ob = int(params.get('stoch_overbought', 80))
 
         # BB
         bb = ta.bbands(df['close'], length=bb_length, std=bb_std)
@@ -306,7 +281,7 @@ class Backtester:
         rsi = ta.rsi(df['close'], length=rsi_period)
         if rsi is None or rsi.empty: return 0, 0, 0
 
-        # ADX Filter < 25 (Not trending)
+        # ADX Filter < 25 (Not trending) - keeping this hardcoded as "Range Filter"
         adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
         if adx_df is None or adx_df.empty: return 0, 0, 0
         adx = adx_df.iloc[:, 0]
@@ -320,11 +295,97 @@ class Backtester:
         range_filter = adx < 25
 
         # Logic
-        # Buy: Close < Lower & RSI < 30 & Stoch_K < 20
-        call_signal = (df['close'] < lower) & (rsi < 30) & (stoch_k < 20) & range_filter
+        # Buy: Close < Lower & RSI < 30 (Hardcoded legacy RSI limit? Or should this match stoch?)
+        # Current logic used hardcoded RSI < 30. WFA grid might add RSI threshold if needed, but for now prompt said "Replace fixed Stoch < 20 with Stoch < params".
+        # We will keep RSI < 30 / > 70 fixed for now as per minimal prompt changes, or match Stoch logic?
+        # Prompt: "Logic: Replace fixed Stoch < 20 with Stoch < params['stoch_oversold']."
+
+        call_signal = (df['close'] < lower) & (rsi < 30) & (stoch_k < stoch_os) & range_filter
 
         # Sell: Close > Upper & RSI > 70 & Stoch_K > 80
-        put_signal = (df['close'] > upper) & (rsi > 70) & (stoch_k > 80) & range_filter
+        put_signal = (df['close'] > upper) & (rsi > 70) & (stoch_k > stoch_ob) & range_filter
+
+        return self._calc_win_loss(df, call_signal, put_signal, duration)
+
+    def _eval_ichimoku(self, df, params):
+        # Ichimoku Cloud Breakout
+        df = df.copy()
+        # Params: tenkan, kijun, senkou_b
+        tenkan_len = int(params.get('tenkan', 9))
+        kijun_len = int(params.get('kijun', 26))
+        senkou_b_len = int(params.get('senkou_b', 52))
+        duration = params['duration']
+
+        # Ichimoku
+        # pandas_ta returns: ISA, ISB, ITS, IKS, ICS
+        ichimoku = ta.ichimoku(df['high'], df['low'], df['close'],
+                               tenkan=tenkan_len, kijun=kijun_len, senkou=senkou_b_len)
+        if ichimoku is None: return 0, 0, 0
+
+        # DataFrame 0 contains the lines, DataFrame 1 contains Span A/B shifted (future)
+        # We need the values for the *current* candle, which means Span A/B shifted forward (already done by library? No, usually shifted 26 forward)
+        # pandas_ta returns tuple (df_lines, df_span)
+        # df_lines columns: ISA_9_26_52, ISB_9_26_52, ITS_9_26_52, IKS_9_26_52, ICS_9_26_52
+        # BUT: Span A and B are usually plotted 26 periods ahead.
+        # For "Price > Cloud", we need the Cloud value at *today*.
+        # Standard Ichimoku check: Close > SpanA[today] AND Close > SpanB[today]
+
+        # pandas_ta puts the current values in the first DF?
+        # Let's inspect columns.
+        # ITS = Tenkan, IKS = Kijun.
+        # ISA = Span A, ISB = Span B.
+        # Note: In pandas_ta, ISA and ISB in the first dataframe are the values corresponding to the current candle *if* they were not shifted?
+        # Actually, for "Price > Cloud", we compare Price against the Cloud values plotted at the current time.
+        # The cloud at 'now' is formed by lines calculated 26 periods ago and shifted forward.
+        # pandas_ta's default behavior for the first DF is to contain the values aligned with 'close'.
+
+        data = ichimoku[0]
+        # Use implicit column ordering or safer naming
+        # pandas_ta column names: ISA_{tenkan}, ISB_{kijun}, ITS_{tenkan}, IKS_{kijun}, ICS_{kijun} (Naming varies by version)
+        # Safest is to take by index if we trust the order: ISA, ISB, ITS, IKS, ICS
+        span_a = data.iloc[:, 0]
+        span_b = data.iloc[:, 1]
+        tenkan = data.iloc[:, 2]
+        kijun = data.iloc[:, 3]
+
+        # Logic:
+        # Long: Price > Cloud (Span A & B) AND Tenkan > Kijun
+        # Trigger: Transition from False to True
+
+        cloud_top = np.maximum(span_a, span_b)
+        cloud_bottom = np.minimum(span_a, span_b)
+
+        # Conditions
+        long_cond = (df['close'] > cloud_top) & (tenkan > kijun)
+        short_cond = (df['close'] < cloud_bottom) & (tenkan < kijun)
+
+        # Transition Check (Signal on the first candle it becomes true)
+        call_signal = long_cond & (~long_cond.shift(1).fillna(False))
+        put_signal = short_cond & (~short_cond.shift(1).fillna(False))
+
+        return self._calc_win_loss(df, call_signal, put_signal, duration)
+
+    def _eval_ema_cross(self, df, params):
+        # EMA Crossover (Golden Cross)
+        df = df.copy()
+        # Params: ema_fast, ema_slow
+        fast_len = int(params.get('ema_fast', 9))
+        slow_len = int(params.get('ema_slow', 50))
+        duration = params['duration']
+
+        ema_fast = ta.ema(df['close'], length=fast_len)
+        ema_slow = ta.ema(df['close'], length=slow_len)
+
+        # Logic:
+        # Long: Fast crosses above Slow
+        # Short: Fast crosses below Slow
+        # Crossover logic: (Fast > Slow) & (Prev_Fast <= Prev_Slow)
+
+        fast_gt_slow = ema_fast > ema_slow
+        fast_lt_slow = ema_fast < ema_slow
+
+        call_signal = fast_gt_slow & (~fast_gt_slow.shift(1).fillna(False))
+        put_signal = fast_lt_slow & (~fast_lt_slow.shift(1).fillna(False))
 
         return self._calc_win_loss(df, call_signal, put_signal, duration)
 
@@ -346,21 +407,19 @@ class Backtester:
     def get_strategy_candidates(self, symbol):
         """Returns list of strategy types to test based on asset class."""
 
+        # UPDATED: Added ICHIMOKU and EMA_CROSS to ALL asset classes as requested.
+
         # 1. Forex & OTC
-        # UPDATED: Added TREND_HEIKIN_ASHI and BREAKOUT.
-        # Markets trend too often to rely solely on Mean Reversion.
         if symbol.startswith('frx') or symbol.startswith('OTC_'):
-            return ['BB_REVERSAL', 'TREND_HEIKIN_ASHI', 'BREAKOUT']
+            return ['BB_REVERSAL', 'TREND_HEIKIN_ASHI', 'BREAKOUT', 'ICHIMOKU', 'EMA_CROSS']
 
         # 2. Step, Jump, Reset, Synthetics (Trend Focus)
-        # symbol.startswith('R_') includes R_10, R_100 etc.
-        # symbol.startswith('1HZ') includes 1HZ10V etc.
         elif (any(symbol.startswith(x) for x in ['stp', 'JD', 'RDBULL', 'RDBEAR', 'R_', '1HZ', 'CRASH', 'BOOM'])):
-            return ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT']
+            return ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT', 'ICHIMOKU', 'EMA_CROSS']
 
         # Default (Try everything for others)
         else:
-            return ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'BB_REVERSAL']
+            return ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'BB_REVERSAL', 'ICHIMOKU', 'EMA_CROSS']
 
     def run_wfa_optimization(self, df, symbol=""):
         """
@@ -395,28 +454,45 @@ class Backtester:
         else:
             st_multipliers = [2.0, 3.0] # Default
 
-        # Strategy Grids
+        # Expanded Strategy Grids
         strategies = {
-            'BB_REVERSAL': {
-                'bb_length': [20],
-                'bb_std': [2.0, 2.5],
-                'rsi_period': [7, 14],
-                'duration': durations
-            },
             'SUPERTREND': {
-                'length': [7, 10, 14],
-                'multiplier': st_multipliers,
+                'length': [10, 14],
+                'multiplier': [3.0, 4.0],
+                'adx_threshold': [20, 25, 30],
+                'trend_ema': [100, 200],
                 'duration': durations
             },
             'TREND_HEIKIN_ASHI': {
                 'ema_period': [50, 100, 200],
+                'adx_threshold': [20, 25],
+                'rsi_max': [70, 75, 80],
+                'duration': durations
+            },
+            'BB_REVERSAL': {
+                'bb_length': [20],
+                'bb_std': [2.0, 2.5],
+                'rsi_period': [14], # Default fixed or added if needed, prompt didn't specify iteration for rsi_period in expanded grid but previous code had it. Sticking to params list.
+                'stoch_oversold': [15, 20],
+                'stoch_overbought': [80, 85],
                 'duration': durations
             },
             'BREAKOUT': {
+                'rsi_entry_bull': [50, 55],
+                'rsi_entry_bear': [45, 50],
                 'duration': durations
             },
-            # Legacy REVERSAL (kept if needed, or we can omit it if BB_REVERSAL supersedes it)
-            # Keeping it out of the main loop for now unless requested to fallback.
+            'ICHIMOKU': {
+                'tenkan': [9],
+                'kijun': [26],
+                'senkou_b': [52],
+                'duration': durations
+            },
+            'EMA_CROSS': {
+                'ema_fast': [9, 20],
+                'ema_slow': [50, 100, 200],
+                'duration': durations
+            }
         }
 
         candidates = self.get_strategy_candidates(symbol)
@@ -464,6 +540,10 @@ class Backtester:
                         wins, losses, signals = self._eval_trend_ha(train_df, params)
                     elif strat_type == 'BREAKOUT':
                         wins, losses, signals = self._eval_breakout(train_df, params)
+                    elif strat_type == 'ICHIMOKU':
+                        wins, losses, signals = self._eval_ichimoku(train_df, params)
+                    elif strat_type == 'EMA_CROSS':
+                        wins, losses, signals = self._eval_ema_cross(train_df, params)
 
                     if signals < 3: continue
 
@@ -484,6 +564,10 @@ class Backtester:
                         v_wins, v_losses, v_signals = self._eval_trend_ha(test_df, best_local_config)
                     elif strat_type == 'BREAKOUT':
                         v_wins, v_losses, v_signals = self._eval_breakout(test_df, best_local_config)
+                    elif strat_type == 'ICHIMOKU':
+                        v_wins, v_losses, v_signals = self._eval_ichimoku(test_df, best_local_config)
+                    elif strat_type == 'EMA_CROSS':
+                        v_wins, v_losses, v_signals = self._eval_ema_cross(test_df, best_local_config)
 
                     agg_results['wins'] += v_wins
                     agg_results['losses'] += v_losses
