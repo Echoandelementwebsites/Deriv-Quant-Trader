@@ -53,7 +53,10 @@ class SignalGenerator:
                  if 'rsi_vol_window' in params: config['rsi_vol_window'] = params['rsi_vol_window']
 
         # Dispatch
-        if strategy_type == 'SUPERTREND':
+        # 1. Check for Ensemble Mode
+        if config.get('mode') == 'ENSEMBLE':
+            result = self._analyze_ensemble(df, config.get('members', []))
+        elif strategy_type == 'SUPERTREND':
             result = self._analyze_supertrend(df, config)
         elif strategy_type == 'BB_REVERSAL':
             result = self._analyze_bb_reversal(df, config)
@@ -89,6 +92,48 @@ class SignalGenerator:
                 return None
 
         return result
+
+    def _analyze_ensemble(self, df, members):
+        # Run all member strategies
+        votes = []
+        analyses = {}
+
+        for i, member_config in enumerate(members):
+            strat_type = member_config.get('strategy_type')
+
+            # Dispatch (Reuse existing methods)
+            res = None
+            if strat_type == 'SUPERTREND': res = self._analyze_supertrend(df, member_config)
+            elif strat_type == 'BB_REVERSAL': res = self._analyze_bb_reversal(df, member_config)
+            elif strat_type == 'TREND_HEIKIN_ASHI': res = self._analyze_trend_ha(df, member_config)
+            elif strat_type == 'BREAKOUT': res = self._analyze_breakout(df, member_config)
+            elif strat_type == 'ICHIMOKU': res = self._analyze_ichimoku(df, member_config)
+            elif strat_type == 'EMA_CROSS': res = self._analyze_ema_cross(df, member_config)
+            elif strat_type == 'PARABOLIC_SAR': res = self._analyze_psar(df, member_config)
+            elif strat_type == 'EMA_PULLBACK': res = self._analyze_ema_pullback(df, member_config)
+            elif strat_type == 'MTF_TREND': res = self._analyze_mtf_trend(df, member_config)
+
+            if res and res['signal']:
+                votes.append(res['signal'])
+                analyses[f'member_{i}_{strat_type}'] = res['analysis']
+            else:
+                votes.append(None) # Abstain
+
+        # Unanimous Consent Logic
+        # If any member says None, NO TRADE.
+        # If members conflict (CALL vs PUT), NO TRADE.
+        if None in votes: return None
+        if not votes: return None # No members?
+
+        if 'CALL' in votes and 'PUT' in votes: return None
+
+        # If we got here, everyone agrees
+        return {
+            'signal': votes[0],
+            'reason': f"Ensemble Agreement ({len(votes)} strats)",
+            'price': df['close'].iloc[-1],
+            'analysis': analyses
+        }
 
     def _analyze_supertrend(self, df, config):
         # Concept: ATR Trailing Stop.

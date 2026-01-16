@@ -36,7 +36,10 @@ class TestBacktesterMultiStrat(unittest.TestCase):
         # We need enough data for Train(3000) + Test(500)
         df = self.create_synthetic_data(length=4000)
 
-        result = self.backtester.run_wfa_optimization(df)
+        # Mock get_strategy_candidates to return a subset to avoid testing everything
+        self.backtester.get_strategy_candidates = MagicMock(return_value=['SUPERTREND', 'EMA_CROSS'])
+
+        result = self.backtester.run_wfa_optimization(df, symbol='R_100')
 
         # Since it's random/linear data, it might not find a profitable strategy,
         # but it shouldn't crash.
@@ -51,8 +54,8 @@ class TestBacktesterMultiStrat(unittest.TestCase):
         else:
             print("No profitable strategy found (Expected for linear noise data)")
 
-    def test_eval_trend_ha_logic(self):
-        # Test specific trend logic helper
+    def test_gen_signals_trend_ha_logic(self):
+        # Test specific trend logic helper (Refactored name)
         df = pd.DataFrame({
             'close': [100, 101, 102, 103, 104, 105] * 20, # Short repeating pattern
             'open': [99, 100, 101, 102, 103, 104] * 20,
@@ -68,12 +71,12 @@ class TestBacktesterMultiStrat(unittest.TestCase):
         # We need enough data for EMA(50)
         # 120 rows is enough
 
-        wins, losses, signals = self.backtester._eval_trend_ha(df, params)
+        call, put = self.backtester._gen_signals_trend_ha(df, params)
 
-        # Just ensure it returns integers
-        self.assertIsInstance(wins, (int, np.integer))
-        self.assertIsInstance(losses, (int, np.integer))
-        self.assertIsInstance(signals, (int, np.integer))
+        # Ensure returns Series
+        self.assertIsInstance(call, pd.Series)
+        self.assertIsInstance(put, pd.Series)
+        self.assertEqual(len(call), len(df))
 
 if __name__ == '__main__':
     unittest.main()

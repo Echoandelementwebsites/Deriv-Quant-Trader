@@ -126,7 +126,8 @@ def backtest_layout():
                         {'name': 'Strategy', 'id': 'strategy_type'},
                         {'name': 'Win Rate', 'id': 'win_rate', 'type': 'numeric', 'format': {'specifier': '.1f'}},
                         {'name': 'Expectancy', 'id': 'expectancy', 'type': 'numeric', 'format': {'specifier': '.3f'}},
-                        {'name': 'Duration (m)', 'id': 'optimal_duration'},
+                        {'name': 'Kelly %', 'id': 'kelly', 'type': 'numeric', 'format': {'specifier': '.1f'}},
+                        {'name': 'Max DD %', 'id': 'max_drawdown', 'type': 'numeric', 'format': {'specifier': '.1f'}},
                         {'name': 'Last Updated', 'id': 'last_updated'}
                     ],
                     data=[],
@@ -169,6 +170,43 @@ def backtest_layout():
                                 'column_id': 'expectancy'
                             },
                             'color': '#dc3545'
+                        },
+                        # Kelly
+                        {
+                            'if': {
+                                'filter_query': '{kelly} >= 5',
+                                'column_id': 'kelly'
+                            },
+                            'color': '#28a745' # Green
+                        },
+                        {
+                            'if': {
+                                'filter_query': '{kelly} > 0 && {kelly} < 5',
+                                'column_id': 'kelly'
+                            },
+                            'color': '#ffc107' # Yellow
+                        },
+                         {
+                            'if': {
+                                'filter_query': '{kelly} == 0',
+                                'column_id': 'kelly'
+                            },
+                            'color': '#dc3545' # Red
+                        },
+                        # Max DD
+                         {
+                            'if': {
+                                'filter_query': '{max_drawdown} > -10',
+                                'column_id': 'max_drawdown'
+                            },
+                            'color': '#28a745' # Green
+                        },
+                         {
+                            'if': {
+                                'filter_query': '{max_drawdown} < -20',
+                                'column_id': 'max_drawdown'
+                            },
+                            'color': '#dc3545' # Red
                         }
                     ],
                     style_cell={
@@ -317,13 +355,6 @@ def check_backtest_result(n):
     State('portfolio-table', 'page_current')
 )
 def update_portfolio_table(page_current, page_size, n, prev_clicks, next_clicks, current_page_state):
-    # Handle custom buttons if they were used (optional, dash_table has built-in pagination UI too)
-    # If we stick to 'custom' action, we must drive the data.
-
-    # We rely on page_current from the table which updates when user clicks table built-in prev/next
-    # If we used buttons, we would need to output 'page_current'
-
-    # Let's just use the table's requested page
     if page_current is None: page_current = 0
     if page_size is None: page_size = 20
 
@@ -339,15 +370,12 @@ def update_portfolio_table(page_current, page_size, n, prev_clicks, next_clicks,
 
             data = []
             for r in rows:
-                # Calculate Expectancy if not stored (Backtester calculates it, but DB stores components?)
-                # DB doesn't store Expectancy explicitly? Checking database.py:
-                # DB: win_rate, signal_count... no Expectancy column.
-                # Re-calculate or assume roughly?
-                # Expectancy = (WinRate% * 0.85) - (LossRate% * 1.0)
-
                 wr = r.win_rate if r.win_rate else 0
-                lr = 100 - wr
-                ev = ((wr/100) * 0.85) - ((lr/100) * 1.0)
+
+                # Fetch new metrics if available, else calculate/default
+                ev = r.expectancy if r.expectancy else ((wr/100) * 0.85) - (((100-wr)/100) * 1.0)
+                kelly = r.kelly if r.kelly else 0.0
+                mdd = r.max_drawdown if r.max_drawdown else 0.0
 
                 strat = r.strategy_type if r.strategy_type else "Legacy (Reversal)"
 
@@ -356,6 +384,8 @@ def update_portfolio_table(page_current, page_size, n, prev_clicks, next_clicks,
                     'strategy_type': strat,
                     'win_rate': wr,
                     'expectancy': ev,
+                    'kelly': kelly,
+                    'max_drawdown': mdd,
                     'optimal_duration': r.optimal_duration,
                     'last_updated': r.last_updated
                 })

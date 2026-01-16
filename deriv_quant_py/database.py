@@ -43,6 +43,11 @@ class StrategyParams(Base):
     strategy_type = Column(String, nullable=True)  # REVERSAL, TREND, BREAKOUT
     config_json = Column(Text, nullable=True)  # Strategy specific params
 
+    # Advanced Metrics
+    expectancy = Column(Float, default=0.0)
+    kelly = Column(Float, default=0.0)
+    max_drawdown = Column(Float, default=0.0)
+
 def init_db(db_url):
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
@@ -70,5 +75,14 @@ def init_db(db_url):
 
             if 'config_json' not in columns:
                 conn.execute(text("ALTER TABLE strategy_params ADD COLUMN config_json TEXT"))
+
+            if 'expectancy' not in columns:
+                conn.execute(text("ALTER TABLE strategy_params ADD COLUMN expectancy FLOAT DEFAULT 0.0"))
+
+            if 'kelly' not in columns:
+                conn.execute(text("ALTER TABLE strategy_params ADD COLUMN kelly FLOAT DEFAULT 0.0"))
+
+            if 'max_drawdown' not in columns:
+                conn.execute(text("ALTER TABLE strategy_params ADD COLUMN max_drawdown FLOAT DEFAULT 0.0"))
 
     return sessionmaker(bind=engine)
