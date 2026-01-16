@@ -1,8 +1,8 @@
 from dash import Dash, html, dcc, Output, Input, State, no_update, dash_table
 import dash
 import dash_bootstrap_components as dbc
-from dash.dash_table import FormatTemplate, Format
-from dash.dash_table.Format import Scheme
+from dash.dash_table import FormatTemplate
+from dash.dash_table.Format import Format, Scheme
 from deriv_quant_py.dashboard.components import create_sidebar, create_top_bar, create_market_grid, create_chart_area, create_logs_area
 from deriv_quant_py.database import init_db, SignalLog, Trade, StrategyParams
 from deriv_quant_py.config import Config
