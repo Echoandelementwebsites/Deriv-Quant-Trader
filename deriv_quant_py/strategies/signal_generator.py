@@ -61,6 +61,10 @@ class SignalGenerator:
             return self._analyze_trend_ha(df, config)
         elif strategy_type == 'BREAKOUT':
             return self._analyze_breakout(df, config)
+        elif strategy_type == 'ICHIMOKU':
+            return self._analyze_ichimoku(df, config)
+        elif strategy_type == 'EMA_CROSS':
+            return self._analyze_ema_cross(df, config)
         elif strategy_type == 'TREND': # Legacy MACD
             return self._analyze_trend(df, config)
         else: # Default/Legacy REVERSAL
@@ -68,9 +72,11 @@ class SignalGenerator:
 
     def _analyze_supertrend(self, df, config):
         # Concept: ATR Trailing Stop.
-        # Params: length (7, 10, 14), multiplier (2.0, 3.0, 4.0)
+        # Params: length (7, 10, 14), multiplier (2.0, 3.0, 4.0), trend_ema, adx_threshold
         length = int(config.get('length', 10))
         multiplier = float(config.get('multiplier', 3.0))
+        trend_ema_len = int(config.get('trend_ema', 200))
+        adx_threshold = int(config.get('adx_threshold', 20))
 
         if len(df) < length + 5:
             return None
@@ -86,18 +92,22 @@ class SignalGenerator:
         st_col = f"SUPERT_{length}_{multiplier}"
         st_line = st[st_col]
 
-        # ADX Filter > 20
+        # ADX Filter
         adx = ta.adx(df['high'], df['low'], df['close'], length=14)
         if adx is None or adx.empty:
              val_adx = 0
         else:
              val_adx = adx.iloc[-1, 0] # ADX_14
 
-        # NEW: Major Trend Filter (EMA 200)
-        ema_200 = ta.ema(df['close'], length=200)
-        # Handle start where EMA is NaN
-        ema_200 = ema_200.fillna(df['close'])
-        val_ema_200 = ema_200.iloc[-1]
+        # NEW: Major Trend Filter (EMA dynamic)
+        ema_trend = ta.ema(df['close'], length=trend_ema_len)
+        if ema_trend is None or ema_trend.empty:
+            # Fallback if EMA cannot be calculated (not enough data)
+            val_ema_trend = df['close'].iloc[-1]
+        else:
+            # Handle start where EMA is NaN
+            ema_trend = ema_trend.fillna(df['close'])
+            val_ema_trend = ema_trend.iloc[-1]
 
         current_price = df['close'].iloc[-1]
         val_st = st_line.iloc[-1]
@@ -106,16 +116,16 @@ class SignalGenerator:
         reason = ""
 
         # Logic:
-        # Long: Close > ST Line (Trend Green) AND ADX > 20 AND Price > EMA 200
-        # Short: Close < ST Line (Trend Red) AND ADX > 20 AND Price < EMA 200
+        # Long: Close > ST Line (Trend Green) AND ADX > Thresh AND Price > EMA
+        # Short: Close < ST Line (Trend Red) AND ADX > Thresh AND Price < EMA
 
-        if val_adx > 20:
-            if current_price > val_st and current_price > val_ema_200:
+        if val_adx > adx_threshold:
+            if current_price > val_st and current_price > val_ema_trend:
                 signal = 'CALL'
-                reason = f"Supertrend: Price {current_price:.2f} > ST {val_st:.2f} & ADX {val_adx:.1f} > 20 & Price > EMA 200"
-            elif current_price < val_st and current_price < val_ema_200:
+                reason = f"Supertrend: Price {current_price:.2f} > ST {val_st:.2f} & ADX {val_adx:.1f} > {adx_threshold} & Price > EMA {trend_ema_len}"
+            elif current_price < val_st and current_price < val_ema_trend:
                 signal = 'PUT'
-                reason = f"Supertrend: Price {current_price:.2f} < ST {val_st:.2f} & ADX {val_adx:.1f} > 20 & Price < EMA 200"
+                reason = f"Supertrend: Price {current_price:.2f} < ST {val_st:.2f} & ADX {val_adx:.1f} > {adx_threshold} & Price < EMA {trend_ema_len}"
 
         return {
             'signal': signal,
@@ -124,17 +134,19 @@ class SignalGenerator:
             'analysis': {
                 'supertrend': val_st,
                 'adx': val_adx,
-                'ema_200': val_ema_200,
+                'ema_200': val_ema_trend, # Key supertrend specific
                 'strategy': 'SUPERTREND'
             }
         } if signal else None
 
     def _analyze_bb_reversal(self, df, config):
         # Concept: Mean Reversion (Forex/OTC)
-        # Params: bb_length (20), bb_std (2.0, 2.5), rsi_period (7, 14)
+        # Params: bb_length (20), bb_std (2.0, 2.5), rsi_period (7, 14), stoch_oversold, stoch_overbought
         bb_length = int(config.get('bb_length', 20))
         bb_std = float(config.get('bb_std', 2.0))
         rsi_p = int(config.get('rsi_period', 14))
+        stoch_os = int(config.get('stoch_oversold', 20))
+        stoch_ob = int(config.get('stoch_overbought', 80))
 
         if len(df) < max(bb_length, rsi_p) + 5:
             return None
@@ -170,16 +182,19 @@ class SignalGenerator:
         reason = ""
 
         # Logic:
-        # Long: Close < Lower Band AND RSI < 30 AND ADX < 25 AND Stoch K < 20
-        # Short: Close > Upper Band AND RSI > 70 AND ADX < 25 AND Stoch K > 80
+        # Long: Close < Lower Band AND RSI < 30 AND ADX < 25 AND Stoch K < Oversold
+        # Short: Close > Upper Band AND RSI > 70 AND ADX < 25 AND Stoch K > Overbought
+
+        # Hardcoded RSI limits (30/70) kept for legacy parity unless we want to param them too
+        # Prompt said "Replace fixed Stoch < 20 with Stoch < params['stoch_oversold']"
 
         if val_adx < 25:
-            if current_price < val_lower and val_rsi < 30 and val_stoch_k < 20:
+            if current_price < val_lower and val_rsi < 30 and val_stoch_k < stoch_os:
                 signal = 'CALL'
-                reason = f"BB Reversion: Price < Lower & RSI {val_rsi:.1f} < 30 & Stoch K {val_stoch_k:.1f} < 20"
-            elif current_price > val_upper and val_rsi > 70 and val_stoch_k > 80:
+                reason = f"BB Reversion: Price < Lower & RSI {val_rsi:.1f} < 30 & Stoch K {val_stoch_k:.1f} < {stoch_os}"
+            elif current_price > val_upper and val_rsi > 70 and val_stoch_k > stoch_ob:
                 signal = 'PUT'
-                reason = f"BB Reversion: Price > Upper & RSI {val_rsi:.1f} > 70 & Stoch K {val_stoch_k:.1f} > 80"
+                reason = f"BB Reversion: Price > Upper & RSI {val_rsi:.1f} > 70 & Stoch K {val_stoch_k:.1f} > {stoch_ob}"
 
         return {
             'signal': signal,
@@ -197,8 +212,10 @@ class SignalGenerator:
 
     def _analyze_trend_ha(self, df, config):
         # Heikin Ashi Trend (Same as Backtester)
-        # Params: ema_period
+        # Params: ema_period, adx_threshold, rsi_max
         ema_p = int(config.get('ema_period', 50))
+        adx_threshold = int(config.get('adx_threshold', 25))
+        rsi_max = int(config.get('rsi_max', 75))
 
         if len(df) < ema_p + 5:
             return None
@@ -207,7 +224,7 @@ class SignalGenerator:
         ema = ta.ema(df['close'], length=ema_p)
         val_ema = ema.iloc[-1]
 
-        # ADX (Fixed 14, Thresh 25)
+        # ADX (Fixed 14, Dynamic Thresh)
         adx = ta.adx(df['high'], df['low'], df['close'], length=14)
         val_adx = adx.iloc[-1, 0] if (adx is not None and not adx.empty) else 0
 
@@ -241,23 +258,26 @@ class SignalGenerator:
         reason = ""
 
         # Logic
-        strong_trend = (val_adx > 25) & adx_slope_rising
+        strong_trend = (val_adx > adx_threshold) & adx_slope_rising
 
-        # Long: HA Green (Close > Open) & Flat Bottom & ADX > 25 & Rising & Price > EMA & RSI < 75
+        # For Short, we use 100 - rsi_max as the lower bound
+        rsi_min_short = 100 - rsi_max
+
+        # Long: HA Green (Close > Open) & Flat Bottom & ADX > Thresh & Rising & Price > EMA & RSI < Max
         ha_green = ha_close > ha_open
         ha_flat_bottom = np.isclose(ha_low, ha_open)
 
-        # Short: HA Red (Close < Open) & Flat Top & ADX > 25 & Rising & Price < EMA & RSI > 25
+        # Short: HA Red (Close < Open) & Flat Top & ADX > Thresh & Rising & Price < EMA & RSI > Min
         ha_red = ha_close < ha_open
         ha_flat_top = np.isclose(ha_high, ha_open)
 
         if strong_trend:
-            if ha_green and ha_flat_bottom and current_price > val_ema and val_rsi < 75:
+            if ha_green and ha_flat_bottom and current_price > val_ema and val_rsi < rsi_max:
                 signal = 'CALL'
-                reason = f"HA Trend: Green Flat Bottom + Price > EMA + ADX {val_adx:.1f} Rising + RSI {val_rsi:.1f} < 75"
-            elif ha_red and ha_flat_top and current_price < val_ema and val_rsi > 25:
+                reason = f"HA Trend: Green Flat Bottom + Price > EMA + ADX {val_adx:.1f} Rising + RSI {val_rsi:.1f} < {rsi_max}"
+            elif ha_red and ha_flat_top and current_price < val_ema and val_rsi > rsi_min_short:
                 signal = 'PUT'
-                reason = f"HA Trend: Red Flat Top + Price < EMA + ADX {val_adx:.1f} Rising + RSI {val_rsi:.1f} > 25"
+                reason = f"HA Trend: Red Flat Top + Price < EMA + ADX {val_adx:.1f} Rising + RSI {val_rsi:.1f} > {rsi_min_short}"
 
         return {
             'signal': signal,
@@ -275,8 +295,9 @@ class SignalGenerator:
 
     def _analyze_breakout(self, df, config):
         # Volatility Squeeze Breakout (BB inside KC)
-        # Params: None (Fixed BB 20/2, KC 20/1.5) or could be passed.
-        # Backtester uses fixed params, so we stick to that unless config overrides.
+        # Params: rsi_entry_bull, rsi_entry_bear
+        rsi_entry_bull = int(config.get('rsi_entry_bull', 55))
+        rsi_entry_bear = int(config.get('rsi_entry_bear', 45))
 
         bb_length = int(config.get('bb_length', 20))
         bb_std = float(config.get('bb_std', 2.0))
@@ -316,15 +337,15 @@ class SignalGenerator:
         reason = ""
 
         # Breakout Signals
-        # Long: Previous was Squeeze AND Close > BB Upper AND RSI > 55
-        if prev_squeeze and current_price > val_bb_upper and val_rsi > 55:
+        # Long: Previous was Squeeze AND Close > BB Upper AND RSI > Bull Thresh
+        if prev_squeeze and current_price > val_bb_upper and val_rsi > rsi_entry_bull:
             signal = 'CALL'
-            reason = f"Squeeze Breakout: Prev Squeeze & Price > BB Upper & RSI {val_rsi:.1f} > 55"
+            reason = f"Squeeze Breakout: Prev Squeeze & Price > BB Upper & RSI {val_rsi:.1f} > {rsi_entry_bull}"
 
-        # Short: Previous was Squeeze AND Close < BB Lower AND RSI < 45
-        elif prev_squeeze and current_price < val_bb_lower and val_rsi < 45:
+        # Short: Previous was Squeeze AND Close < BB Lower AND RSI < Bear Thresh
+        elif prev_squeeze and current_price < val_bb_lower and val_rsi < rsi_entry_bear:
             signal = 'PUT'
-            reason = f"Squeeze Breakout: Prev Squeeze & Price < BB Lower & RSI {val_rsi:.1f} < 45"
+            reason = f"Squeeze Breakout: Prev Squeeze & Price < BB Lower & RSI {val_rsi:.1f} < {rsi_entry_bear}"
 
         return {
             'signal': signal,
@@ -402,6 +423,127 @@ class SignalGenerator:
                 'rsi': val_rsi,
                 'pattern': pattern,
                 'strategy': 'REVERSAL'
+            }
+        } if signal else None
+
+    def _analyze_ichimoku(self, df, config):
+        # Ichimoku Cloud Breakout
+        # Params: tenkan, kijun, senkou_b
+        tenkan_len = int(config.get('tenkan', 9))
+        kijun_len = int(config.get('kijun', 26))
+        senkou_b_len = int(config.get('senkou_b', 52))
+
+        if len(df) < max(tenkan_len, kijun_len, senkou_b_len) + 5:
+            return None
+
+        # Ichimoku
+        ichimoku = ta.ichimoku(df['high'], df['low'], df['close'],
+                               tenkan=tenkan_len, kijun=kijun_len, senkou=senkou_b_len)
+        if ichimoku is None: return None
+
+        # Parse data
+        data = ichimoku[0]
+        # Current values
+        # Access by index: ISA, ISB, ITS, IKS
+        span_a = data.iloc[:, 0]
+        span_b = data.iloc[:, 1]
+        tenkan = data.iloc[:, 2]
+        kijun = data.iloc[:, 3]
+
+        current_price = df['close'].iloc[-1]
+
+        val_span_a = span_a.iloc[-1]
+        val_span_b = span_b.iloc[-1]
+        val_tenkan = tenkan.iloc[-1]
+        val_kijun = kijun.iloc[-1]
+
+        # Previous values (for transition check)
+        val_span_a_prev = span_a.iloc[-2]
+        val_span_b_prev = span_b.iloc[-2]
+        val_tenkan_prev = tenkan.iloc[-2]
+        val_kijun_prev = kijun.iloc[-2]
+        val_price_prev = df['close'].iloc[-2]
+
+        # Logic:
+        # Long: Price > Cloud (Span A & B) AND Tenkan > Kijun
+        # Trigger: Transition from False to True
+
+        cloud_top = np.maximum(val_span_a, val_span_b)
+        cloud_bottom = np.minimum(val_span_a, val_span_b)
+
+        cloud_top_prev = np.maximum(val_span_a_prev, val_span_b_prev)
+        cloud_bottom_prev = np.minimum(val_span_a_prev, val_span_b_prev)
+
+        long_cond = (current_price > cloud_top) and (val_tenkan > val_kijun)
+        long_cond_prev = (val_price_prev > cloud_top_prev) and (val_tenkan_prev > val_kijun_prev)
+
+        short_cond = (current_price < cloud_bottom) and (val_tenkan < val_kijun)
+        short_cond_prev = (val_price_prev < cloud_bottom_prev) and (val_tenkan_prev < val_kijun_prev)
+
+        signal = None
+        reason = ""
+
+        if long_cond and not long_cond_prev:
+            signal = 'CALL'
+            reason = f"Ichimoku: Price {current_price:.2f} > Cloud & Tenkan > Kijun (Transition)"
+        elif short_cond and not short_cond_prev:
+            signal = 'PUT'
+            reason = f"Ichimoku: Price {current_price:.2f} < Cloud & Tenkan < Kijun (Transition)"
+
+        return {
+            'signal': signal,
+            'reason': reason,
+            'price': current_price,
+            'analysis': {
+                'span_a': val_span_a,
+                'span_b': val_span_b,
+                'tenkan': val_tenkan,
+                'kijun': val_kijun,
+                'strategy': 'ICHIMOKU'
+            }
+        } if signal else None
+
+    def _analyze_ema_cross(self, df, config):
+        # EMA Crossover (Golden Cross)
+        # Params: ema_fast, ema_slow
+        fast_len = int(config.get('ema_fast', 9))
+        slow_len = int(config.get('ema_slow', 50))
+
+        if len(df) < max(fast_len, slow_len) + 5:
+            return None
+
+        ema_fast = ta.ema(df['close'], length=fast_len)
+        ema_slow = ta.ema(df['close'], length=slow_len)
+
+        val_fast = ema_fast.iloc[-1]
+        val_slow = ema_slow.iloc[-1]
+        val_fast_prev = ema_fast.iloc[-2]
+        val_slow_prev = ema_slow.iloc[-2]
+
+        current_price = df['close'].iloc[-1]
+
+        signal = None
+        reason = ""
+
+        # Logic:
+        # Long: Fast crosses above Slow (Fast > Slow and Prev_Fast <= Prev_Slow)
+        if val_fast > val_slow and val_fast_prev <= val_slow_prev:
+            signal = 'CALL'
+            reason = f"EMA Cross: Fast({fast_len}) {val_fast:.2f} crossed above Slow({slow_len}) {val_slow:.2f}"
+
+        # Short: Fast crosses below Slow (Fast < Slow and Prev_Fast >= Prev_Slow)
+        elif val_fast < val_slow and val_fast_prev >= val_slow_prev:
+            signal = 'PUT'
+            reason = f"EMA Cross: Fast({fast_len}) {val_fast:.2f} crossed below Slow({slow_len}) {val_slow:.2f}"
+
+        return {
+            'signal': signal,
+            'reason': reason,
+            'price': current_price,
+            'analysis': {
+                'ema_fast': val_fast,
+                'ema_slow': val_slow,
+                'strategy': 'EMA_CROSS'
             }
         } if signal else None
 
