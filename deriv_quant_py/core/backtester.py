@@ -389,37 +389,119 @@ class Backtester:
 
         return self._calc_win_loss(df, call_signal, put_signal, duration)
 
-    def _calc_win_loss(self, df, call_signal, put_signal, duration):
+    def _eval_psar(self, df, params):
+        # Parabolic SAR for Step/Jump
+        df = df.copy()
+        af = float(params['af'])
+        max_af = float(params['max_af'])
+        adx_thresh = int(params.get('adx_threshold', 20))
+        duration = int(params['duration'])
+
+        # PSAR
+        psar = ta.psar(df['high'], df['low'], df['close'], af0=af, af=af, max_af=max_af)
+        if psar is None: return 0, 0, 0
+        # Coalesce PSAR columns (pandas_ta returns separate long/short cols)
+        psar_combined = psar.iloc[:, 0].fillna(psar.iloc[:, 1])
+
+        # ADX Filter
+        adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
+        adx = adx_df.iloc[:, 0] if adx_df is not None else 0
+
+        trend_ok = adx > adx_thresh
+
+        call_signal = (df['close'] > psar_combined) & trend_ok
+        put_signal = (df['close'] < psar_combined) & trend_ok
+
+        return self._calc_win_loss(df, call_signal, put_signal, duration, params.get('symbol', ''))
+
+    def _eval_ema_pullback(self, df, params):
+        # EMA Pullback
+        df = df.copy()
+        ema_t_len = int(params['ema_trend'])
+        ema_p_len = int(params['ema_pullback'])
+        rsi_lim = int(params['rsi_limit'])
+        duration = int(params['duration'])
+
+        df['EMA_Trend'] = ta.ema(df['close'], length=ema_t_len)
+        df['EMA_Pullback'] = ta.ema(df['close'], length=ema_p_len)
+        df['RSI'] = ta.rsi(df['close'], length=14)
+
+        if df['EMA_Trend'] is None or df['EMA_Pullback'] is None: return 0, 0, 0
+
+        # Long: Trend Up, Touched Pullback, Bounce Up, RSI Safe
+        trend_up = df['close'] > df['EMA_Trend']
+        touched_support = df['low'] <= df['EMA_Pullback']
+        bounce_up = (df['close'] > df['open']) & (df['close'] > df['EMA_Pullback'])
+        safe_rsi = df['RSI'] < rsi_lim
+
+        call_signal = trend_up & touched_support & bounce_up & safe_rsi
+
+        # Short: Trend Down, Touched Resist, Bounce Down, RSI Safe
+        trend_down = df['close'] < df['EMA_Trend']
+        touched_resist = df['high'] >= df['EMA_Pullback']
+        bounce_down = (df['close'] < df['open']) & (df['close'] < df['EMA_Pullback'])
+        safe_rsi_short = df['RSI'] > (100 - rsi_lim)
+
+        put_signal = trend_down & touched_resist & bounce_down & safe_rsi_short
+
+        return self._calc_win_loss(df, call_signal, put_signal, duration, params.get('symbol', ''))
+
+    def _eval_mtf_trend(self, df, params):
+        # MTF Trend
+        df = df.copy()
+        mtf_len = int(params['mtf_ema'])
+        local_len = int(params['local_ema'])
+        duration = int(params['duration'])
+
+        df['EMA_MTF'] = ta.ema(df['close'], length=mtf_len)
+        df['EMA_Local'] = ta.ema(df['close'], length=local_len)
+        df['RSI'] = ta.rsi(df['close'], length=14)
+
+        if df['EMA_MTF'] is None: return 0, 0, 0
+
+        call_signal = (df['close'] > df['EMA_MTF']) & (df['close'] > df['EMA_Local']) & (df['RSI'] > 50)
+        put_signal = (df['close'] < df['EMA_MTF']) & (df['close'] < df['EMA_Local']) & (df['RSI'] < 50)
+
+        return self._calc_win_loss(df, call_signal, put_signal, duration, params.get('symbol', ''))
+
+    def _calc_win_loss(self, df, call_signal, put_signal, duration, symbol=""):
+        # UPDATED: Crash/Boom AND Reset Indices Protection
+
+        # 1. Block Puts on Bullish Assets (Crash / RDBULL)
+        if symbol and ('CRASH' in symbol or 'RDBULL' in symbol):
+            put_signal = put_signal & False
+
+        # 2. Block Calls on Bearish Assets (Boom / RDBEAR)
+        if symbol and ('BOOM' in symbol or 'RDBEAR' in symbol):
+            call_signal = call_signal & False
+
         future_close = df['close'].shift(-duration)
 
         call_wins = call_signal & (future_close > df['close'])
         call_losses = call_signal & (future_close <= df['close'])
-
         put_wins = put_signal & (future_close < df['close'])
         put_losses = put_signal & (future_close >= df['close'])
 
-        total_wins = call_wins.sum() + put_wins.sum()
-        total_losses = call_losses.sum() + put_losses.sum()
-        total_signals = call_signal.sum() + put_signal.sum()
-
-        return total_wins, total_losses, total_signals
+        return call_wins.sum() + put_wins.sum(), call_losses.sum() + put_losses.sum(), call_signal.sum() + put_signal.sum()
 
     def get_strategy_candidates(self, symbol):
         """Returns list of strategy types to test based on asset class."""
 
-        # UPDATED: Added ICHIMOKU and EMA_CROSS to ALL asset classes as requested.
-
-        # 1. Forex & OTC
+        # 1. Forex/OTC -> Pullback Specialist
         if symbol.startswith('frx') or symbol.startswith('OTC_'):
-            return ['BB_REVERSAL', 'TREND_HEIKIN_ASHI', 'BREAKOUT', 'ICHIMOKU', 'EMA_CROSS']
+            return ['EMA_PULLBACK', 'BB_REVERSAL']
 
-        # 2. Step, Jump, Reset, Synthetics (Trend Focus)
-        elif (any(symbol.startswith(x) for x in ['stp', 'JD', 'RDBULL', 'RDBEAR', 'R_', '1HZ', 'CRASH', 'BOOM'])):
-            return ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT', 'ICHIMOKU', 'EMA_CROSS']
+        # 2. Step/Jump -> PSAR Specialist
+        elif any(x in symbol for x in ['stp', 'JD']):
+             return ['PARABOLIC_SAR', 'SUPERTREND']
 
-        # Default (Try everything for others)
+        # 3. Crash/Boom/Reset -> Trend Specialist (With Directional Bias enforced)
+        elif any(x in symbol for x in ['CRASH', 'BOOM', 'RDBULL', 'RDBEAR']):
+             return ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'PARABOLIC_SAR']
+
+        # 4. Vol Indices (R_100, 1HZ) -> Trend & MTF
         else:
-            return ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'BB_REVERSAL', 'ICHIMOKU', 'EMA_CROSS']
+             return ['MTF_TREND', 'SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT']
 
     def run_wfa_optimization(self, df, symbol=""):
         """
@@ -492,6 +574,23 @@ class Backtester:
                 'ema_fast': [9, 20],
                 'ema_slow': [50, 100, 200],
                 'duration': durations
+            },
+            'PARABOLIC_SAR': {
+                'af': [0.01, 0.02, 0.03],       # Test Tight vs Loose stops
+                'max_af': [0.2],                # Standard is usually best
+                'adx_threshold': [20, 25],      # Test Trend Strength requirement
+                'duration': durations
+            },
+            'EMA_PULLBACK': {
+                'ema_trend': [200],             # Major trend baseline
+                'ema_pullback': [20, 50],       # Test shallow (20) vs deep (50) dips
+                'rsi_limit': [55, 60, 65],      # Test "Overbought" tolerance
+                'duration': durations
+            },
+            'MTF_TREND': {
+                'mtf_ema': [1000, 2000, 3000],  # Simulates 5m (1000) to 15m (3000) trends on 1m chart
+                'local_ema': [50, 100],         # Micro-trend confirmation
+                'duration': durations
             }
         }
 
@@ -544,6 +643,12 @@ class Backtester:
                         wins, losses, signals = self._eval_ichimoku(train_df, params)
                     elif strat_type == 'EMA_CROSS':
                         wins, losses, signals = self._eval_ema_cross(train_df, params)
+                    elif strat_type == 'PARABOLIC_SAR':
+                        wins, losses, signals = self._eval_psar(train_df, params)
+                    elif strat_type == 'EMA_PULLBACK':
+                        wins, losses, signals = self._eval_ema_pullback(train_df, params)
+                    elif strat_type == 'MTF_TREND':
+                        wins, losses, signals = self._eval_mtf_trend(train_df, params)
 
                     if signals < 3: continue
 
@@ -568,6 +673,12 @@ class Backtester:
                         v_wins, v_losses, v_signals = self._eval_ichimoku(test_df, best_local_config)
                     elif strat_type == 'EMA_CROSS':
                         v_wins, v_losses, v_signals = self._eval_ema_cross(test_df, best_local_config)
+                    elif strat_type == 'PARABOLIC_SAR':
+                        v_wins, v_losses, v_signals = self._eval_psar(test_df, best_local_config)
+                    elif strat_type == 'EMA_PULLBACK':
+                        v_wins, v_losses, v_signals = self._eval_ema_pullback(test_df, best_local_config)
+                    elif strat_type == 'MTF_TREND':
+                        v_wins, v_losses, v_signals = self._eval_mtf_trend(test_df, best_local_config)
 
                     agg_results['wins'] += v_wins
                     agg_results['losses'] += v_losses
