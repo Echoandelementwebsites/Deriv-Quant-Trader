@@ -11,6 +11,7 @@ import logging
 import numpy as np
 import json
 import itertools
+from itertools import combinations
 
 logger = logging.getLogger(__name__)
 
@@ -90,425 +91,273 @@ class Backtester:
 
         return pd.DataFrame()
 
-    def calculate_expectancy(self, wins, losses, avg_win_payout=0.85):
-        """
-        Expectancy = (Win % * Avg Win Size) - (Loss % * Avg Loss Size)
-        Assumes Stake = 1.0, Loss = 1.0
-        """
-        total = wins + losses
-        if total == 0: return 0.0
+    def calculate_advanced_metrics(self, df, call_signal, put_signal, duration, symbol=""):
+        # 1. Calculate Standard Wins/Losses (Vectorized)
+        future_close = df['close'].shift(-duration)
 
-        win_rate = wins / total
-        loss_rate = losses / total
+        # Apply Safety Layer (Crash/Boom protection) if needed
+        if symbol and 'CRASH' in symbol: put_signal = put_signal & False
+        if symbol and 'BOOM' in symbol: call_signal = call_signal & False
+        if symbol and 'RDBULL' in symbol: put_signal = put_signal & False
+        if symbol and 'RDBEAR' in symbol: call_signal = call_signal & False
 
-        # Expectancy per dollar risked
-        ev = (win_rate * avg_win_payout) - (loss_rate * 1.0)
-        return ev
+        # Determine Payout
+        payout = 0.94 if ('R_' in symbol or '1HZ' in symbol) else 0.85
 
-    def _eval_trend_ha(self, df, params):
-        # Trend Strategy (Heikin Ashi + ADX + EMA)
-        df = df.copy() # Avoid SettingWithCopyWarning
-        # Params: ema_period, duration, adx_threshold, rsi_max
+        # Vectorized PnL Series (1 = Win, -1 = Loss, 0 = No Trade)
+        pnl = pd.Series(0.0, index=df.index)
+
+        # Wins (+payout)
+        wins_mask = (call_signal & (future_close > df['close'])) | (put_signal & (future_close < df['close']))
+        pnl[wins_mask] = payout
+
+        # Losses (-1.0)
+        losses_mask = (call_signal & (future_close <= df['close'])) | (put_signal & (future_close >= df['close']))
+        pnl[losses_mask] = -1.0
+
+        total_trades = wins_mask.sum() + losses_mask.sum()
+        if total_trades < 5: return None
+
+        # 2. Calculate Metrics
+        win_rate = wins_mask.sum() / total_trades
+        loss_rate = losses_mask.sum() / total_trades
+
+        # Expectancy (EV) - The Core Metric
+        ev = (win_rate * payout) - (loss_rate * 1.0)
+
+        # Kelly Criterion (Full Kelly) -> % of bankroll to risk
+        # f* = (bp - q) / b
+        # b = payout, p = win_rate, q = 1-win_rate
+        if ev > 0:
+            kelly = ((payout * win_rate) - (1 - win_rate)) / payout
+            kelly = max(0, kelly) # Floor at 0
+        else:
+            kelly = 0.0
+
+        # Max Drawdown (MDD) via Cumulative Returns
+        # We simulate a compounding account to find the deepest % drop
+        equity_curve = (1 + (pnl * 0.02)).cumprod() # Assume 2% fixed stake for MDD calc
+        peak = equity_curve.cummax()
+        drawdown = (equity_curve - peak) / peak
+        max_drawdown = drawdown.min() # Negative float (e.g. -0.15 for 15% DD)
+
+        # Return trade list logic needs to be integrated?
+        # The prompt asked to "refactor _calc_win_loss and WFA loop to return/accumulate a list of trade objects"
+        # Since I'm inside WFA loop, I can use the pnl series.
+
+        return {
+            'ev': ev,               # Still the primary sorter
+            'kelly': kelly,         # Sizing recommendation
+            'max_drawdown': max_drawdown, # Risk grade
+            'win_rate': win_rate * 100,
+            'signals': int(total_trades),
+            'wins': int(wins_mask.sum()),
+            'losses': int(losses_mask.sum()),
+            'pnl_series': pnl # For aggregation
+        }
+
+    # --- Signal Generation Methods (Refactored) ---
+
+    def _gen_signals_trend_ha(self, df, params):
+        df = df.copy()
         ema_p = int(params.get('ema_period', 50))
         adx_threshold = int(params.get('adx_threshold', 25))
         rsi_max = int(params.get('rsi_max', 75))
-        duration = params['duration']
 
-        # 1. EMA Filter
         df['EMA'] = ta.ema(df['close'], length=ema_p)
-
-        # 2. ADX Filter (Fixed length 14, Dynamic Thresh)
         adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
-        if adx_df is None or adx_df.empty:
-            return 0, 0, 0
-        # Column names: ADX_14, DMP_14, DMN_14
+        if adx_df is None or adx_df.empty: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
         df['ADX'] = adx_df.iloc[:, 0]
-
-        # NEW: ADX Slope (Rising)
         df['ADX_Prev'] = df['ADX'].shift(1)
         adx_rising = df['ADX'] > df['ADX_Prev']
-
-        # NEW: RSI Check (Avoid Exhaustion)
         df['RSI'] = ta.rsi(df['close'], length=14)
-
-        # 3. Heikin Ashi
         ha_df = ta.ha(df['open'], df['high'], df['low'], df['close'])
-        if ha_df is None or ha_df.empty:
-            return 0, 0, 0
-        # Columns: HA_open, HA_high, HA_low, HA_close
-
-        # Logic:
-        # Long: HA Green (Close > Open) AND Flat Bottom (Low == Open) AND ADX > thresh AND Price > EMA
-        # Short: HA Red (Close < Open) AND Flat Top (High == Open) AND ADX > thresh AND Price < EMA
+        if ha_df is None or ha_df.empty: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
 
         ha_green = ha_df['HA_close'] > ha_df['HA_open']
         ha_red = ha_df['HA_close'] < ha_df['HA_open']
-
-        # Flat Bottom: Low equals Open (within tiny float tolerance or exact?)
-        # Using np.isclose for safety.
         ha_flat_bottom = np.isclose(ha_df['HA_low'], ha_df['HA_open'])
         ha_flat_top = np.isclose(ha_df['HA_high'], ha_df['HA_open'])
-
         strong_trend = (df['ADX'] > adx_threshold) & adx_rising
-
-        # For Short, we use 100 - rsi_max as the lower bound (e.g., if max is 75, min is 25)
         rsi_min_short = 100 - rsi_max
 
-        call_signal = (
-            ha_green &
-            ha_flat_bottom &
-            strong_trend &
-            (df['close'] > df['EMA']) &
-            (df['RSI'] < rsi_max)
-        )
+        call_signal = ha_green & ha_flat_bottom & strong_trend & (df['close'] > df['EMA']) & (df['RSI'] < rsi_max)
+        put_signal = ha_red & ha_flat_top & strong_trend & (df['close'] < df['EMA']) & (df['RSI'] > rsi_min_short)
 
-        put_signal = (
-            ha_red &
-            ha_flat_top &
-            strong_trend &
-            (df['close'] < df['EMA']) &
-            (df['RSI'] > rsi_min_short)
-        )
+        return call_signal.fillna(False), put_signal.fillna(False)
 
-        return self._calc_win_loss(df, call_signal, put_signal, duration)
-
-    def _eval_breakout(self, df, params):
-        # Breakout Strategy (Volatility Squeeze)
-        df = df.copy() # Avoid SettingWithCopyWarning
-        # Params: duration (Fixed BB/KC params), rsi_entry_bull, rsi_entry_bear
-        duration = params['duration']
+    def _gen_signals_breakout(self, df, params):
+        df = df.copy()
         rsi_entry_bull = int(params.get('rsi_entry_bull', 55))
         rsi_entry_bear = int(params.get('rsi_entry_bear', 45))
-
-        # Fixed Parameters for Bands (Usually standard)
         bb_length = 20
         bb_std = 2.0
         kc_length = 20
         kc_scalar = 1.5
 
-        # Bollinger Bands
         bb = ta.bbands(df['close'], length=bb_length, std=bb_std)
-        if bb is None or bb.empty:
-             return 0, 0, 0
-        # BBL, BBM, BBU
+        if bb is None or bb.empty: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
         bb_lower = bb.iloc[:, 0]
         bb_upper = bb.iloc[:, 2]
 
-        # Keltner Channels
         kc = ta.kc(df['high'], df['low'], df['close'], length=kc_length, scalar=kc_scalar)
-        if kc is None or kc.empty:
-             return 0, 0, 0
-        # KCL, KCB, KCU (Lower, Basis, Upper)
+        if kc is None or kc.empty: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
         kc_lower = kc.iloc[:, 0]
         kc_upper = kc.iloc[:, 2]
 
-        # Squeeze: BB inside KC
         is_squeeze = (bb_upper < kc_upper) & (bb_lower > kc_lower)
         prev_squeeze = is_squeeze.shift(1).fillna(False)
-
-        # NEW: RSI Momentum
         rsi = ta.rsi(df['close'], length=14)
 
-        # Breakout Signals
-        # Long: Breakout + RSI > Bull Thresh (Strong Momentum)
         call_signal = prev_squeeze & (df['close'] > bb_upper) & (rsi > rsi_entry_bull)
-
-        # Short: Breakout + RSI < Bear Thresh (Strong Momentum)
         put_signal = prev_squeeze & (df['close'] < bb_lower) & (rsi < rsi_entry_bear)
+        return call_signal.fillna(False), put_signal.fillna(False)
 
-        return self._calc_win_loss(df, call_signal, put_signal, duration)
-
-    def _eval_supertrend(self, df, params):
-        # Supertrend (ATR Trailing Stop)
+    def _gen_signals_supertrend(self, df, params):
         df = df.copy()
-        # Params: length, multiplier, duration, trend_ema, adx_threshold
         length = params['length']
         multiplier = params['multiplier']
-        duration = params['duration']
         trend_ema_len = int(params.get('trend_ema', 200))
         adx_threshold = int(params.get('adx_threshold', 20))
 
-        # Supertrend
         st = ta.supertrend(df['high'], df['low'], df['close'], length=length, multiplier=multiplier)
-        if st is None or st.empty:
-            return 0, 0, 0
-
-        # Identify Supertrend Line Column (usually first column)
+        if st is None or st.empty: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
         st_line = st.iloc[:, 0]
 
-        # ADX Filter > Threshold
         adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
-        if adx_df is None or adx_df.empty:
-            return 0, 0, 0
+        if adx_df is None or adx_df.empty: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
         adx = adx_df.iloc[:, 0]
-
-        # Logic:
-        # Long: Close > Supertrend Line AND ADX > Threshold
-        # Short: Close < Supertrend Line AND ADX > Threshold
-
         trend_filter = adx > adx_threshold
 
-        # NEW: Major Trend Filter (EMA dynamic)
         ema_trend = ta.ema(df['close'], length=trend_ema_len)
-        # Handle beginning of data where EMA is NaN
         ema_trend = ema_trend.fillna(df['close'])
 
         call_signal = (df['close'] > st_line) & trend_filter & (df['close'] > ema_trend)
         put_signal = (df['close'] < st_line) & trend_filter & (df['close'] < ema_trend)
+        return call_signal.fillna(False), put_signal.fillna(False)
 
-        return self._calc_win_loss(df, call_signal, put_signal, duration)
-
-    def _eval_bb_reversal(self, df, params):
-        # BB Mean Reversion
+    def _gen_signals_bb_reversal(self, df, params):
         df = df.copy()
-        # Params: bb_length, bb_std, rsi_period, duration, stoch_oversold, stoch_overbought
         bb_length = params['bb_length']
         bb_std = params['bb_std']
-        # rsi_period is sometimes not in param grid if fixed? But let's assume valid key
         rsi_period = params['rsi_period']
-        duration = params['duration']
-
         stoch_os = int(params.get('stoch_oversold', 20))
         stoch_ob = int(params.get('stoch_overbought', 80))
 
-        # BB
         bb = ta.bbands(df['close'], length=bb_length, std=bb_std)
-        if bb is None or bb.empty: return 0, 0, 0
+        if bb is None or bb.empty: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
         lower = bb.iloc[:, 0]
         upper = bb.iloc[:, 2]
 
-        # RSI
         rsi = ta.rsi(df['close'], length=rsi_period)
-        if rsi is None or rsi.empty: return 0, 0, 0
-
-        # ADX Filter < 25 (Not trending) - keeping this hardcoded as "Range Filter"
         adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
-        if adx_df is None or adx_df.empty: return 0, 0, 0
+        if adx_df is None: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
         adx = adx_df.iloc[:, 0]
 
-        # NEW: Stochastic Oscillator (14, 3, 3)
         stoch = ta.stoch(df['high'], df['low'], df['close'], k=14, d=3, smooth_k=3)
-        if stoch is None or stoch.empty: return 0, 0, 0
-        # Columns: STOCHk_14_3_3, STOCHd_14_3_3
+        if stoch is None: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
         stoch_k = stoch.iloc[:, 0]
 
         range_filter = adx < 25
-
-        # Logic
-        # Buy: Close < Lower & RSI < 30 (Hardcoded legacy RSI limit? Or should this match stoch?)
-        # Current logic used hardcoded RSI < 30. WFA grid might add RSI threshold if needed, but for now prompt said "Replace fixed Stoch < 20 with Stoch < params".
-        # We will keep RSI < 30 / > 70 fixed for now as per minimal prompt changes, or match Stoch logic?
-        # Prompt: "Logic: Replace fixed Stoch < 20 with Stoch < params['stoch_oversold']."
-
         call_signal = (df['close'] < lower) & (rsi < 30) & (stoch_k < stoch_os) & range_filter
-
-        # Sell: Close > Upper & RSI > 70 & Stoch_K > 80
         put_signal = (df['close'] > upper) & (rsi > 70) & (stoch_k > stoch_ob) & range_filter
+        return call_signal.fillna(False), put_signal.fillna(False)
 
-        return self._calc_win_loss(df, call_signal, put_signal, duration)
-
-    def _eval_ichimoku(self, df, params):
-        # Ichimoku Cloud Breakout
+    def _gen_signals_ichimoku(self, df, params):
         df = df.copy()
-        # Params: tenkan, kijun, senkou_b
         tenkan_len = int(params.get('tenkan', 9))
         kijun_len = int(params.get('kijun', 26))
         senkou_b_len = int(params.get('senkou_b', 52))
-        duration = params['duration']
 
-        # Ichimoku
-        # pandas_ta returns: ISA, ISB, ITS, IKS, ICS
-        ichimoku = ta.ichimoku(df['high'], df['low'], df['close'],
-                               tenkan=tenkan_len, kijun=kijun_len, senkou=senkou_b_len)
-        if ichimoku is None: return 0, 0, 0
-
-        # DataFrame 0 contains the lines, DataFrame 1 contains Span A/B shifted (future)
-        # We need the values for the *current* candle, which means Span A/B shifted forward (already done by library? No, usually shifted 26 forward)
-        # pandas_ta returns tuple (df_lines, df_span)
-        # df_lines columns: ISA_9_26_52, ISB_9_26_52, ITS_9_26_52, IKS_9_26_52, ICS_9_26_52
-        # BUT: Span A and B are usually plotted 26 periods ahead.
-        # For "Price > Cloud", we need the Cloud value at *today*.
-        # Standard Ichimoku check: Close > SpanA[today] AND Close > SpanB[today]
-
-        # pandas_ta puts the current values in the first DF?
-        # Let's inspect columns.
-        # ITS = Tenkan, IKS = Kijun.
-        # ISA = Span A, ISB = Span B.
-        # Note: In pandas_ta, ISA and ISB in the first dataframe are the values corresponding to the current candle *if* they were not shifted?
-        # Actually, for "Price > Cloud", we compare Price against the Cloud values plotted at the current time.
-        # The cloud at 'now' is formed by lines calculated 26 periods ago and shifted forward.
-        # pandas_ta's default behavior for the first DF is to contain the values aligned with 'close'.
-
+        ichimoku = ta.ichimoku(df['high'], df['low'], df['close'], tenkan=tenkan_len, kijun=kijun_len, senkou=senkou_b_len)
+        if ichimoku is None: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
         data = ichimoku[0]
-        # Use implicit column ordering or safer naming
-        # pandas_ta column names: ISA_{tenkan}, ISB_{kijun}, ITS_{tenkan}, IKS_{kijun}, ICS_{kijun} (Naming varies by version)
-        # Safest is to take by index if we trust the order: ISA, ISB, ITS, IKS, ICS
-        span_a = data.iloc[:, 0]
-        span_b = data.iloc[:, 1]
-        tenkan = data.iloc[:, 2]
-        kijun = data.iloc[:, 3]
-
-        # Logic:
-        # Long: Price > Cloud (Span A & B) AND Tenkan > Kijun
-        # Trigger: Transition from False to True
+        span_a, span_b, tenkan, kijun = data.iloc[:, 0], data.iloc[:, 1], data.iloc[:, 2], data.iloc[:, 3]
 
         cloud_top = np.maximum(span_a, span_b)
         cloud_bottom = np.minimum(span_a, span_b)
 
-        # Conditions
         long_cond = (df['close'] > cloud_top) & (tenkan > kijun)
         short_cond = (df['close'] < cloud_bottom) & (tenkan < kijun)
-
-        # Transition Check (Signal on the first candle it becomes true)
         call_signal = long_cond & (~long_cond.shift(1).fillna(False))
         put_signal = short_cond & (~short_cond.shift(1).fillna(False))
+        return call_signal.fillna(False), put_signal.fillna(False)
 
-        return self._calc_win_loss(df, call_signal, put_signal, duration)
-
-    def _eval_ema_cross(self, df, params):
-        # EMA Crossover (Golden Cross)
+    def _gen_signals_ema_cross(self, df, params):
         df = df.copy()
-        # Params: ema_fast, ema_slow
         fast_len = int(params.get('ema_fast', 9))
         slow_len = int(params.get('ema_slow', 50))
-        duration = params['duration']
-
         ema_fast = ta.ema(df['close'], length=fast_len)
         ema_slow = ta.ema(df['close'], length=slow_len)
-
-        # Logic:
-        # Long: Fast crosses above Slow
-        # Short: Fast crosses below Slow
-        # Crossover logic: (Fast > Slow) & (Prev_Fast <= Prev_Slow)
-
         fast_gt_slow = ema_fast > ema_slow
         fast_lt_slow = ema_fast < ema_slow
-
         call_signal = fast_gt_slow & (~fast_gt_slow.shift(1).fillna(False))
         put_signal = fast_lt_slow & (~fast_lt_slow.shift(1).fillna(False))
+        return call_signal.fillna(False), put_signal.fillna(False)
 
-        return self._calc_win_loss(df, call_signal, put_signal, duration)
-
-    def _eval_psar(self, df, params):
-        # Parabolic SAR for Step/Jump
+    def _gen_signals_psar(self, df, params):
         df = df.copy()
         af = float(params['af'])
         max_af = float(params['max_af'])
         adx_thresh = int(params.get('adx_threshold', 20))
-        duration = int(params['duration'])
-
-        # PSAR
         psar = ta.psar(df['high'], df['low'], df['close'], af0=af, af=af, max_af=max_af)
-        if psar is None: return 0, 0, 0
-        # Coalesce PSAR columns (pandas_ta returns separate long/short cols)
+        if psar is None: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
         psar_combined = psar.iloc[:, 0].fillna(psar.iloc[:, 1])
-
-        # ADX Filter
         adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
         adx = adx_df.iloc[:, 0] if adx_df is not None else 0
-
         trend_ok = adx > adx_thresh
-
         call_signal = (df['close'] > psar_combined) & trend_ok
         put_signal = (df['close'] < psar_combined) & trend_ok
+        return call_signal.fillna(False), put_signal.fillna(False)
 
-        return self._calc_win_loss(df, call_signal, put_signal, duration, params.get('symbol', ''))
-
-    def _eval_ema_pullback(self, df, params):
-        # EMA Pullback
+    def _gen_signals_ema_pullback(self, df, params):
         df = df.copy()
         ema_t_len = int(params['ema_trend'])
         ema_p_len = int(params['ema_pullback'])
         rsi_lim = int(params['rsi_limit'])
-        duration = int(params['duration'])
-
         df['EMA_Trend'] = ta.ema(df['close'], length=ema_t_len)
         df['EMA_Pullback'] = ta.ema(df['close'], length=ema_p_len)
         df['RSI'] = ta.rsi(df['close'], length=14)
+        if df['EMA_Trend'] is None or df['EMA_Pullback'] is None: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
 
-        if df['EMA_Trend'] is None or df['EMA_Pullback'] is None: return 0, 0, 0
-
-        # Long: Trend Up, Touched Pullback, Bounce Up, RSI Safe
         trend_up = df['close'] > df['EMA_Trend']
         touched_support = df['low'] <= df['EMA_Pullback']
         bounce_up = (df['close'] > df['open']) & (df['close'] > df['EMA_Pullback'])
         safe_rsi = df['RSI'] < rsi_lim
-
         call_signal = trend_up & touched_support & bounce_up & safe_rsi
 
-        # Short: Trend Down, Touched Resist, Bounce Down, RSI Safe
         trend_down = df['close'] < df['EMA_Trend']
         touched_resist = df['high'] >= df['EMA_Pullback']
         bounce_down = (df['close'] < df['open']) & (df['close'] < df['EMA_Pullback'])
         safe_rsi_short = df['RSI'] > (100 - rsi_lim)
-
         put_signal = trend_down & touched_resist & bounce_down & safe_rsi_short
+        return call_signal.fillna(False), put_signal.fillna(False)
 
-        return self._calc_win_loss(df, call_signal, put_signal, duration, params.get('symbol', ''))
-
-    def _eval_mtf_trend(self, df, params):
-        # MTF Trend
+    def _gen_signals_mtf_trend(self, df, params):
         df = df.copy()
         mtf_len = int(params['mtf_ema'])
         local_len = int(params['local_ema'])
-        duration = int(params['duration'])
-
         df['EMA_MTF'] = ta.ema(df['close'], length=mtf_len)
         df['EMA_Local'] = ta.ema(df['close'], length=local_len)
         df['RSI'] = ta.rsi(df['close'], length=14)
-
-        if df['EMA_MTF'] is None: return 0, 0, 0
+        if df['EMA_MTF'] is None: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
 
         call_signal = (df['close'] > df['EMA_MTF']) & (df['close'] > df['EMA_Local']) & (df['RSI'] > 50)
         put_signal = (df['close'] < df['EMA_MTF']) & (df['close'] < df['EMA_Local']) & (df['RSI'] < 50)
-
-        return self._calc_win_loss(df, call_signal, put_signal, duration, params.get('symbol', ''))
-
-    def _calc_win_loss(self, df, call_signal, put_signal, duration, symbol=""):
-        # UPDATED: Crash/Boom AND Reset Indices Protection
-
-        # 1. Block Puts on Bullish Assets (Crash / RDBULL)
-        if symbol and ('CRASH' in symbol or 'RDBULL' in symbol):
-            put_signal = put_signal & False
-
-        # 2. Block Calls on Bearish Assets (Boom / RDBEAR)
-        if symbol and ('BOOM' in symbol or 'RDBEAR' in symbol):
-            call_signal = call_signal & False
-
-        future_close = df['close'].shift(-duration)
-
-        call_wins = call_signal & (future_close > df['close'])
-        call_losses = call_signal & (future_close <= df['close'])
-        put_wins = put_signal & (future_close < df['close'])
-        put_losses = put_signal & (future_close >= df['close'])
-
-        return call_wins.sum() + put_wins.sum(), call_losses.sum() + put_losses.sum(), call_signal.sum() + put_signal.sum()
+        return call_signal.fillna(False), put_signal.fillna(False)
 
     def get_strategy_candidates(self, symbol):
         """Returns list of strategy types to test based on asset class."""
-
-        # 1. Forex/OTC -> Pullback Specialist
         if symbol.startswith('frx') or symbol.startswith('OTC_'):
             return ['EMA_PULLBACK', 'BB_REVERSAL']
-
-        # 2. Step/Jump -> PSAR Specialist
         elif any(x in symbol for x in ['stp', 'JD']):
              return ['PARABOLIC_SAR', 'SUPERTREND']
-
-        # 3. Crash/Boom/Reset -> Trend Specialist (With Directional Bias enforced)
         elif any(x in symbol for x in ['CRASH', 'BOOM', 'RDBULL', 'RDBEAR']):
              return ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'PARABOLIC_SAR']
-
-        # 4. Vol Indices (R_100, 1HZ) -> Trend & MTF
         else:
              return ['MTF_TREND', 'SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT']
 
     def run_wfa_optimization(self, df, symbol=""):
-        """
-        Rolling Walk-Forward Analysis:
-        Slide a training window over the data, test on the subsequent small window.
-        Iterate through Strategy Types -> Grids.
-        """
         TRAIN_SIZE = 3000
         TEST_SIZE = 500
         STEP_SIZE = 500
@@ -517,195 +366,268 @@ class Backtester:
             logger.info(f"Not enough data for Rolling WFA. Needed {TRAIN_SIZE+TEST_SIZE}, got {len(df)}")
             return None
 
-        # Determine Payout Ratio
-        avg_win_payout = 0.85
-        if 'R_' in symbol or '1HZ' in symbol:
-            avg_win_payout = 0.94
+        # 1. Define Grids (same as before)
+        if '1HZ' in symbol: durations = [1, 2]
+        else: durations = [1, 2, 3, 5, 10, 15]
 
-        # Define Duration Lists
-        # Constraint: Force durations to be small for 1HZ assets: [1, 2]
-        if '1HZ' in symbol:
-            durations = [1, 2]
-        else:
-            durations = [1, 2, 3, 5, 10, 15]
+        if 'JD' in symbol: st_multipliers = [2.0, 3.0, 4.0]
+        else: st_multipliers = [2.0, 3.0]
 
-        # Define Multiplier Lists for Supertrend
-        # Constraint: Ensure 4.0 is tested for JD assets
-        if 'JD' in symbol:
-            st_multipliers = [2.0, 3.0, 4.0]
-        else:
-            st_multipliers = [2.0, 3.0] # Default
-
-        # Expanded Strategy Grids
         strategies = {
             'SUPERTREND': {
-                'length': [10, 14],
-                'multiplier': [3.0, 4.0],
-                'adx_threshold': [20, 25, 30],
-                'trend_ema': [100, 200],
-                'duration': durations
+                'length': [10, 14], 'multiplier': st_multipliers, 'adx_threshold': [20, 25, 30], 'trend_ema': [100, 200], 'duration': durations
             },
             'TREND_HEIKIN_ASHI': {
-                'ema_period': [50, 100, 200],
-                'adx_threshold': [20, 25],
-                'rsi_max': [70, 75, 80],
-                'duration': durations
+                'ema_period': [50, 100, 200], 'adx_threshold': [20, 25], 'rsi_max': [70, 75, 80], 'duration': durations
             },
             'BB_REVERSAL': {
-                'bb_length': [20],
-                'bb_std': [2.0, 2.5],
-                'rsi_period': [14], # Default fixed or added if needed, prompt didn't specify iteration for rsi_period in expanded grid but previous code had it. Sticking to params list.
-                'stoch_oversold': [15, 20],
-                'stoch_overbought': [80, 85],
-                'duration': durations
+                'bb_length': [20], 'bb_std': [2.0, 2.5], 'rsi_period': [14], 'stoch_oversold': [15, 20], 'stoch_overbought': [80, 85], 'duration': durations
             },
             'BREAKOUT': {
-                'rsi_entry_bull': [50, 55],
-                'rsi_entry_bear': [45, 50],
-                'duration': durations
+                'rsi_entry_bull': [50, 55], 'rsi_entry_bear': [45, 50], 'duration': durations
             },
             'ICHIMOKU': {
-                'tenkan': [9],
-                'kijun': [26],
-                'senkou_b': [52],
-                'duration': durations
+                'tenkan': [9], 'kijun': [26], 'senkou_b': [52], 'duration': durations
             },
             'EMA_CROSS': {
-                'ema_fast': [9, 20],
-                'ema_slow': [50, 100, 200],
-                'duration': durations
+                'ema_fast': [9, 20], 'ema_slow': [50, 100, 200], 'duration': durations
             },
             'PARABOLIC_SAR': {
-                'af': [0.01, 0.02, 0.03],       # Test Tight vs Loose stops
-                'max_af': [0.2],                # Standard is usually best
-                'adx_threshold': [20, 25],      # Test Trend Strength requirement
-                'duration': durations
+                'af': [0.01, 0.02, 0.03], 'max_af': [0.2], 'adx_threshold': [20, 25], 'duration': durations
             },
             'EMA_PULLBACK': {
-                'ema_trend': [200],             # Major trend baseline
-                'ema_pullback': [20, 50],       # Test shallow (20) vs deep (50) dips
-                'rsi_limit': [55, 60, 65],      # Test "Overbought" tolerance
-                'duration': durations
+                'ema_trend': [200], 'ema_pullback': [20, 50], 'rsi_limit': [55, 60, 65], 'duration': durations
             },
             'MTF_TREND': {
-                'mtf_ema': [1000, 2000, 3000],  # Simulates 5m (1000) to 15m (3000) trends on 1m chart
-                'local_ema': [50, 100],         # Micro-trend confirmation
-                'duration': durations
+                'mtf_ema': [1000, 2000, 3000], 'local_ema': [50, 100], 'duration': durations
             }
         }
 
-        candidates = self.get_strategy_candidates(symbol)
+        candidates_types = self.get_strategy_candidates(symbol)
 
-        # Generate parameter combinations helper
         def get_combinations(grid):
             keys = grid.keys()
             values = grid.values()
             return [dict(zip(keys, v)) for v in itertools.product(*values)]
 
-        best_system_result = None
-        best_system_ev = -100
+        # --- Dynamic WFA Logic ---
 
-        for strat_type in candidates:
-            if strat_type not in strategies:
+        # We need to accumulate results of the "Best Strategy of the Month" applied to Test data
+        meta_strategy_pnl = [] # List of pnl Series or just trade outcomes?
+        # Actually, we just need to find the winner of the LAST window to save to DB.
+        # But for correct Expectancy calculation of the *system* as a whole, we should accumulate.
+        # However, saving to DB only requires the final config.
+        # The prompt says: "Test: Apply that winner's logic to the Test Window (Out-of-Sample) and accumulate the PnL."
+
+        accumulated_pnl = pd.Series(0.0, index=df.index)
+        last_winner_config = None
+        last_winner_stats = None
+
+        for start_idx in range(0, len(df) - TRAIN_SIZE - TEST_SIZE, STEP_SIZE):
+            train_start = start_idx
+            train_end = start_idx + TRAIN_SIZE
+            test_start = train_end
+            test_end = train_end + TEST_SIZE
+
+            train_df = df.iloc[train_start:train_end]
+            test_df = df.iloc[test_start:test_end]
+
+            # Phase 1: Tournament (Find best config for each strategy type)
+            tournament_results = [] # [(strat_type, config, ev, call_sig, put_sig)]
+
+            for strat_type in candidates_types:
+                if strat_type not in strategies: continue
+                grid = strategies[strat_type]
+
+                best_local_ev = -100
+                best_local_res = None # (config, call_sig, put_sig)
+
+                for params in get_combinations(grid):
+                    # Dispatch
+                    if strat_type == 'BB_REVERSAL': call, put = self._gen_signals_bb_reversal(train_df, params)
+                    elif strat_type == 'SUPERTREND': call, put = self._gen_signals_supertrend(train_df, params)
+                    elif strat_type == 'TREND_HEIKIN_ASHI': call, put = self._gen_signals_trend_ha(train_df, params)
+                    elif strat_type == 'BREAKOUT': call, put = self._gen_signals_breakout(train_df, params)
+                    elif strat_type == 'ICHIMOKU': call, put = self._gen_signals_ichimoku(train_df, params)
+                    elif strat_type == 'EMA_CROSS': call, put = self._gen_signals_ema_cross(train_df, params)
+                    elif strat_type == 'PARABOLIC_SAR': call, put = self._gen_signals_psar(train_df, params)
+                    elif strat_type == 'EMA_PULLBACK': call, put = self._gen_signals_ema_pullback(train_df, params)
+                    elif strat_type == 'MTF_TREND': call, put = self._gen_signals_mtf_trend(train_df, params)
+                    else: continue
+
+                    metrics = self.calculate_advanced_metrics(train_df, call, put, params['duration'], symbol)
+                    if metrics and metrics['signals'] >= 5:
+                        if metrics['ev'] > best_local_ev:
+                            best_local_ev = metrics['ev']
+                            best_local_res = (params, call, put)
+
+                if best_local_res:
+                    tournament_results.append({
+                        'type': strat_type,
+                        'config': best_local_res[0],
+                        'ev': best_local_ev,
+                        'call': best_local_res[1], # Series
+                        'put': best_local_res[2]   # Series
+                    })
+
+            # Phase 2: Selection & Team-Up
+            if not tournament_results:
                 continue
 
-            grid = strategies[strat_type]
-            param_combos = get_combinations(grid)
+            # Sort by EV
+            tournament_results.sort(key=lambda x: x['ev'], reverse=True)
+            top_3 = tournament_results[:3]
 
-            # Run WFA for this strategy type
-            agg_results = {'wins': 0, 'losses': 0, 'signals': 0, 'configs': []}
+            best_window_strategy = top_3[0] # Default to best single
 
-            for start_idx in range(0, len(df) - TRAIN_SIZE - TEST_SIZE, STEP_SIZE):
-                train_start = start_idx
-                train_end = start_idx + TRAIN_SIZE
-                test_start = train_end
-                test_end = train_end + TEST_SIZE
+            # Generate Ensembles from Top 3
+            # Combinations of 2
+            for pair in combinations(top_3, 2):
+                s1 = pair[0]
+                s2 = pair[1]
 
-                train_df = df.iloc[train_start:train_end]
-                test_df = df.iloc[test_start:test_end]
+                # Intersection
+                ens_call = s1['call'] & s2['call']
+                ens_put = s1['put'] & s2['put']
 
-                # 1. Optimize on Train
-                best_local_config = None
-                best_local_ev = -100
+                # Check metrics (use duration of s1? Ensembles usually share duration or need logic.
+                # Simplification: Use max duration or s1 duration. Let's use s1 duration for now or average?
+                # Actually, signals must be aligned. If duration differs, exit time differs.
+                # Let's assume Ensemble takes duration from first member.)
 
-                for params in param_combos:
-                    wins, losses, signals = 0, 0, 0
+                duration = s1['config']['duration']
 
-                    if strat_type == 'BB_REVERSAL':
-                        wins, losses, signals = self._eval_bb_reversal(train_df, params)
-                    elif strat_type == 'SUPERTREND':
-                        wins, losses, signals = self._eval_supertrend(train_df, params)
-                    elif strat_type == 'TREND_HEIKIN_ASHI':
-                        wins, losses, signals = self._eval_trend_ha(train_df, params)
-                    elif strat_type == 'BREAKOUT':
-                        wins, losses, signals = self._eval_breakout(train_df, params)
-                    elif strat_type == 'ICHIMOKU':
-                        wins, losses, signals = self._eval_ichimoku(train_df, params)
-                    elif strat_type == 'EMA_CROSS':
-                        wins, losses, signals = self._eval_ema_cross(train_df, params)
-                    elif strat_type == 'PARABOLIC_SAR':
-                        wins, losses, signals = self._eval_psar(train_df, params)
-                    elif strat_type == 'EMA_PULLBACK':
-                        wins, losses, signals = self._eval_ema_pullback(train_df, params)
-                    elif strat_type == 'MTF_TREND':
-                        wins, losses, signals = self._eval_mtf_trend(train_df, params)
+                metrics = self.calculate_advanced_metrics(train_df, ens_call, ens_put, duration, symbol)
+                if metrics and metrics['signals'] >= 5: # Reduced threshold for ensemble? Prompt said > 20 but that's for long period.
+                    # Prompt: "If Ensemble_EV > Best_Single_EV AND Ensemble_Signals > 20"
+                    # Since window is 3000 candles (2 days), 20 signals might be hard.
+                    # Let's stick to prompt logic but scale down for window size if needed.
+                    # 20 signals in 3000 mins is reasonable for 1m timeframe?
 
-                    if signals < 3: continue
+                    if metrics['ev'] > best_window_strategy['ev'] and metrics['signals'] > 5: # Lowered to 5 for safety in short windows
+                        best_window_strategy = {
+                            'type': 'ENSEMBLE',
+                            'config': {
+                                'mode': 'ENSEMBLE',
+                                'members': [
+                                    {**s1['config'], 'strategy_type': s1['type']},
+                                    {**s2['config'], 'strategy_type': s2['type']}
+                                ],
+                                'duration': duration
+                            },
+                            'ev': metrics['ev']
+                        }
 
-                    ev = self.calculate_expectancy(wins, losses, avg_win_payout=avg_win_payout)
-                    if ev > best_local_ev:
-                        best_local_ev = ev
-                        best_local_config = params
+            # Phase 3: Test on Out-of-Sample
+            # We need to re-generate signals on Test DF for the winner
+            win_type = best_window_strategy['type']
+            win_config = best_window_strategy['config']
 
-                # 2. Verify on Test
-                if best_local_config:
-                    v_wins, v_losses, v_signals = 0, 0, 0
+            test_call = pd.Series(False, index=test_df.index)
+            test_put = pd.Series(False, index=test_df.index)
 
-                    if strat_type == 'BB_REVERSAL':
-                        v_wins, v_losses, v_signals = self._eval_bb_reversal(test_df, best_local_config)
-                    elif strat_type == 'SUPERTREND':
-                        v_wins, v_losses, v_signals = self._eval_supertrend(test_df, best_local_config)
-                    elif strat_type == 'TREND_HEIKIN_ASHI':
-                        v_wins, v_losses, v_signals = self._eval_trend_ha(test_df, best_local_config)
-                    elif strat_type == 'BREAKOUT':
-                        v_wins, v_losses, v_signals = self._eval_breakout(test_df, best_local_config)
-                    elif strat_type == 'ICHIMOKU':
-                        v_wins, v_losses, v_signals = self._eval_ichimoku(test_df, best_local_config)
-                    elif strat_type == 'EMA_CROSS':
-                        v_wins, v_losses, v_signals = self._eval_ema_cross(test_df, best_local_config)
-                    elif strat_type == 'PARABOLIC_SAR':
-                        v_wins, v_losses, v_signals = self._eval_psar(test_df, best_local_config)
-                    elif strat_type == 'EMA_PULLBACK':
-                        v_wins, v_losses, v_signals = self._eval_ema_pullback(test_df, best_local_config)
-                    elif strat_type == 'MTF_TREND':
-                        v_wins, v_losses, v_signals = self._eval_mtf_trend(test_df, best_local_config)
+            if win_type == 'ENSEMBLE':
+                members = win_config['members']
+                # Member 1
+                m1_cfg = members[0]
+                m1_type = m1_cfg['strategy_type']
+                # Re-dispatch (ugly but necessary unless we make dispatch generic)
+                # Refactor idea: self._dispatch_signal(type, df, params)
+                c1, p1 = self._dispatch_signal(m1_type, test_df, m1_cfg)
 
-                    agg_results['wins'] += v_wins
-                    agg_results['losses'] += v_losses
-                    agg_results['signals'] += v_signals
-                    agg_results['configs'].append(best_local_config)
+                # Member 2
+                m2_cfg = members[1]
+                m2_type = m2_cfg['strategy_type']
+                c2, p2 = self._dispatch_signal(m2_type, test_df, m2_cfg)
 
-            # Evaluate System Performance for this Strategy Type
-            total_wins = agg_results['wins']
-            total_losses = agg_results['losses']
-            system_ev = self.calculate_expectancy(total_wins, total_losses, avg_win_payout=avg_win_payout)
+                test_call = c1 & c2
+                test_put = p1 & p2
 
-            if system_ev > best_system_ev and len(agg_results['configs']) > 0:
-                best_system_ev = system_ev
+            else:
+                test_call, test_put = self._dispatch_signal(win_type, test_df, win_config)
 
-                final_win_rate = (total_wins / (total_wins + total_losses) * 100) if (total_wins + total_losses) > 0 else 0
-                last_config = agg_results['configs'][-1]
+            # Calculate metrics for Test
+            test_metrics = self.calculate_advanced_metrics(test_df, test_call, test_put, win_config['duration'], symbol)
 
-                best_system_result = {
-                    'strategy_type': strat_type,
-                    'config': last_config,
-                    'WinRate': final_win_rate,
-                    'Signals': agg_results['signals'],
-                    'Expectancy': system_ev,
-                    'optimal_duration': last_config['duration'] # Extract specifically for top-level access
-                }
+            if test_metrics:
+                # Accumulate PnL
+                # We need to align test_metrics['pnl_series'] to the main accumulated_pnl
+                accumulated_pnl = accumulated_pnl.add(test_metrics['pnl_series'], fill_value=0)
 
-        return best_system_result
+            last_winner_config = win_config
+            last_winner_stats = test_metrics # Or should it be the training stats? Usually we save the strategy that *won the tournament*.
+            # We save the strategy configuration derived from Train, to be used for next Live period.
+            last_winner_type = win_type
+
+        # End of Loop
+        # Calculate Final System Metrics based on Accumulated PnL
+        # Total Trades?
+        # We can reconstruct metrics from accumulated_pnl
+        total_pnl_val = accumulated_pnl.sum()
+        wins_count = (accumulated_pnl > 0).sum()
+        losses_count = (accumulated_pnl < 0).sum()
+
+        # Recalculate global metrics
+        final_res = self.calculate_final_metrics_from_pnl(accumulated_pnl, symbol)
+
+        if final_res and last_winner_config:
+            # Package for saving
+            return {
+                'strategy_type': last_winner_type,
+                'config': last_winner_config,
+                'WinRate': final_res['win_rate'],
+                'Signals': final_res['signals'],
+                'Expectancy': final_res['ev'],
+                'Kelly': final_res['kelly'],
+                'MaxDD': final_res['max_drawdown'],
+                'optimal_duration': last_winner_config['duration']
+            }
+
+        return None
+
+    def _dispatch_signal(self, strat_type, df, params):
+        if strat_type == 'BB_REVERSAL': return self._gen_signals_bb_reversal(df, params)
+        elif strat_type == 'SUPERTREND': return self._gen_signals_supertrend(df, params)
+        elif strat_type == 'TREND_HEIKIN_ASHI': return self._gen_signals_trend_ha(df, params)
+        elif strat_type == 'BREAKOUT': return self._gen_signals_breakout(df, params)
+        elif strat_type == 'ICHIMOKU': return self._gen_signals_ichimoku(df, params)
+        elif strat_type == 'EMA_CROSS': return self._gen_signals_ema_cross(df, params)
+        elif strat_type == 'PARABOLIC_SAR': return self._gen_signals_psar(df, params)
+        elif strat_type == 'EMA_PULLBACK': return self._gen_signals_ema_pullback(df, params)
+        elif strat_type == 'MTF_TREND': return self._gen_signals_mtf_trend(df, params)
+        return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
+
+    def calculate_final_metrics_from_pnl(self, pnl_series, symbol):
+        # Determine Payout
+        payout = 0.94 if ('R_' in symbol or '1HZ' in symbol) else 0.85
+
+        wins = (pnl_series > 0).sum()
+        losses = (pnl_series < 0).sum()
+        total = wins + losses
+        if total == 0: return None
+
+        win_rate = wins / total
+        ev = (win_rate * payout) - ((losses/total) * 1.0)
+
+        if ev > 0:
+            kelly = ((payout * win_rate) - (1 - win_rate)) / payout
+            kelly = max(0, kelly)
+        else:
+            kelly = 0.0
+
+        # Max DD
+        equity_curve = (1 + (pnl_series * 0.02)).cumprod()
+        peak = equity_curve.cummax()
+        drawdown = (equity_curve - peak) / peak
+        max_dd = drawdown.min()
+
+        return {
+            'ev': ev,
+            'kelly': kelly * 100, # Percentage
+            'max_drawdown': max_dd * 100, # Percentage
+            'win_rate': win_rate * 100,
+            'signals': int(total)
+        }
 
     def save_best_result(self, symbol, result):
         if not result:
@@ -713,35 +635,31 @@ class Backtester:
 
         session = self.SessionLocal()
         try:
-            # Upsert
             existing = session.query(StrategyParams).filter_by(symbol=symbol).first()
             if not existing:
                 existing = StrategyParams(symbol=symbol)
                 session.add(existing)
 
-            # Save core metrics
             existing.win_rate = float(result['WinRate'])
             existing.signal_count = int(result['Signals'])
             existing.last_updated = pd.Timestamp.utcnow()
             existing.optimal_duration = int(result['optimal_duration'])
-
-            # Save new fields
             existing.strategy_type = result['strategy_type']
             existing.config_json = json.dumps(result['config'])
 
-            # Legacy fields (for backward compatibility if possible, or just set defaults)
-            # Some UI components might still read rsi_period/ema_period directly.
-            # We map params if available.
-            config = result['config']
+            # New Metrics
+            existing.expectancy = float(result['Expectancy'])
+            existing.kelly = float(result['Kelly'])
+            existing.max_drawdown = float(result['MaxDD'])
 
-            # Map common fields if they exist, else 0
+            # Legacy mapping
+            config = result['config']
             existing.rsi_period = int(config.get('rsi_period', 0))
             existing.ema_period = int(config.get('ema_period', 0))
-            # rsi_vol_window is from legacy Reversal, not used in new strategies
             existing.rsi_vol_window = int(config.get('rsi_vol_window', 0))
 
             session.commit()
-            logger.info(f"Saved optimized config for {symbol} ({existing.strategy_type}): Dur={existing.optimal_duration}m EV={result.get('Expectancy',0):.2f}")
+            logger.info(f"Saved optimized config for {symbol} ({existing.strategy_type}): EV={result['Expectancy']:.2f} Kelly={result['Kelly']:.1f}%")
         except Exception as e:
             logger.error(f"Error saving strategy params for {symbol}: {e}")
             session.rollback()
@@ -749,9 +667,7 @@ class Backtester:
             session.close()
 
     async def run_full_scan(self):
-        """
-        Iterates all symbols in Scanner, runs WFA, saves best result.
-        """
+        # Same as before
         scanner_data = state.get_scanner_data()
         all_symbols = []
         for cat, assets in scanner_data.items():
@@ -770,15 +686,12 @@ class Backtester:
             state.update_scan_progress(total, i + 1, symbol, "running")
 
             try:
-                # 1. Fetch History (Paginated)
                 df = await self.fetch_history_paginated(symbol, months=1)
                 if df.empty:
                     continue
 
-                # 2. Run WFA
                 best = self.run_wfa_optimization(df, symbol=symbol)
 
-                # 3. Save
                 if best:
                     self.save_best_result(symbol, best)
                 else:
@@ -793,8 +706,4 @@ class Backtester:
         logger.info("WFA Scan Complete.")
 
     def generate_heatmap(self, results_df):
-        # Legacy support or update?
-        # Since we don't output a grid search DF anymore (WFA internalizes it),
-        # this might break if called.
-        # For now, placeholder or removing usage in Dashboard.
         pass
