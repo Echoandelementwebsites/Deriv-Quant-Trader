@@ -1,6 +1,8 @@
 from dash import Dash, html, dcc, Output, Input, State, no_update, dash_table
 import dash
 import dash_bootstrap_components as dbc
+from dash.dash_table import FormatTemplate, Format
+from dash.dash_table.Format import Scheme
 from deriv_quant_py.dashboard.components import create_sidebar, create_top_bar, create_market_grid, create_chart_area, create_logs_area
 from deriv_quant_py.database import init_db, SignalLog, Trade, StrategyParams
 from deriv_quant_py.config import Config
@@ -9,6 +11,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import json
 
 # Initialize DB connection for the frontend
@@ -122,13 +125,17 @@ def backtest_layout():
                 dash_table.DataTable(
                     id='portfolio-table',
                     columns=[
-                        {'name': 'Symbol', 'id': 'symbol'},
+                        {'name': 'Asset', 'id': 'symbol'},
                         {'name': 'Strategy', 'id': 'strategy_type'},
-                        {'name': 'Win Rate', 'id': 'win_rate', 'type': 'numeric', 'format': {'specifier': '.1f'}},
-                        {'name': 'Expectancy', 'id': 'expectancy', 'type': 'numeric', 'format': {'specifier': '.3f'}},
-                        {'name': 'Kelly %', 'id': 'kelly', 'type': 'numeric', 'format': {'specifier': '.1f'}},
-                        {'name': 'Max DD %', 'id': 'max_drawdown', 'type': 'numeric', 'format': {'specifier': '.1f'}},
-                        {'name': 'Last Updated', 'id': 'last_updated'}
+                        {'name': 'Win Rate', 'id': 'win_rate', 'type': 'numeric', 'format': FormatTemplate.percentage(1)},
+                        {'name': 'EV', 'id': 'expectancy', 'type': 'numeric', 'format': Format(precision=2, scheme=Scheme.fixed)},
+
+                        # --- ADD THESE NEW COLUMNS ---
+                        {'name': 'Kelly %', 'id': 'kelly', 'type': 'numeric', 'format': FormatTemplate.percentage(1)},
+                        {'name': 'Max DD', 'id': 'max_drawdown', 'type': 'numeric', 'format': FormatTemplate.percentage(1)},
+                        # -----------------------------
+
+                        {'name': 'Last Optimized', 'id': 'timestamp'}
                     ],
                     data=[],
                     style_header={
@@ -141,72 +148,19 @@ def backtest_layout():
                         'color': 'white'
                     },
                     style_data_conditional=[
+                        # Kelly Color Coding
                         {
-                            'if': {
-                                'filter_query': '{win_rate} >= 55',
-                                'column_id': 'win_rate'
-                            },
-                            'backgroundColor': '#28a745',
-                            'color': 'white'
+                            'if': {'filter_query': '{kelly} >= 0.05', 'column_id': 'kelly'},
+                            'backgroundColor': '#d4edda', 'color': 'green' # Green for > 5%
                         },
                         {
-                            'if': {
-                                'filter_query': '{win_rate} < 45',
-                                'column_id': 'win_rate'
-                            },
-                            'backgroundColor': '#dc3545',
-                            'color': 'white'
+                            'if': {'filter_query': '{kelly} > 0 && {kelly} < 0.05', 'column_id': 'kelly'},
+                            'backgroundColor': '#fff3cd', 'color': '#856404' # Yellow for 1-5%
                         },
-                         {
-                            'if': {
-                                'filter_query': '{expectancy} > 0',
-                                'column_id': 'expectancy'
-                            },
-                            'color': '#28a745'
-                        },
+                        # Max Drawdown Warning
                         {
-                            'if': {
-                                'filter_query': '{expectancy} < 0',
-                                'column_id': 'expectancy'
-                            },
-                            'color': '#dc3545'
-                        },
-                        # Kelly
-                        {
-                            'if': {
-                                'filter_query': '{kelly} >= 5',
-                                'column_id': 'kelly'
-                            },
-                            'color': '#28a745' # Green
-                        },
-                        {
-                            'if': {
-                                'filter_query': '{kelly} > 0 && {kelly} < 5',
-                                'column_id': 'kelly'
-                            },
-                            'color': '#ffc107' # Yellow
-                        },
-                         {
-                            'if': {
-                                'filter_query': '{kelly} == 0',
-                                'column_id': 'kelly'
-                            },
-                            'color': '#dc3545' # Red
-                        },
-                        # Max DD
-                         {
-                            'if': {
-                                'filter_query': '{max_drawdown} > -10',
-                                'column_id': 'max_drawdown'
-                            },
-                            'color': '#28a745' # Green
-                        },
-                         {
-                            'if': {
-                                'filter_query': '{max_drawdown} < -20',
-                                'column_id': 'max_drawdown'
-                            },
-                            'color': '#dc3545' # Red
+                            'if': {'filter_query': '{max_drawdown} < -0.2', 'column_id': 'max_drawdown'},
+                            'backgroundColor': '#f8d7da', 'color': '#721c24' # Red for High Drawdown
                         }
                     ],
                     style_cell={
@@ -360,37 +314,23 @@ def update_portfolio_table(page_current, page_size, n, prev_clicks, next_clicks,
 
     try:
         with SessionLocal() as session:
-            # Query
-            query = session.query(StrategyParams).order_by(StrategyParams.last_updated.desc())
+            # Ensure the query grabs the new fields
+            # Aliasing last_updated as timestamp to match the column definition
+            stmt = text("SELECT symbol, strategy_type, win_rate, expectancy, kelly, max_drawdown, last_updated AS timestamp FROM strategy_params ORDER BY last_updated DESC")
+
+            df = pd.read_sql(stmt, session.bind)
+
+            # CRITICAL: Handle NULL values (New columns might be NULL for old rows)
+            df['kelly'] = df['kelly'].fillna(0.0)
+            df['max_drawdown'] = df['max_drawdown'].fillna(0.0)
+            df['expectancy'] = df['expectancy'].fillna(0.0)
 
             # Pagination
-            offset = page_current * page_size
-            total = query.count()
-            rows = query.offset(offset).limit(page_size).all()
+            start = page_current * page_size
+            end = start + page_size
+            dff = df.iloc[start:end]
 
-            data = []
-            for r in rows:
-                wr = r.win_rate if r.win_rate else 0
-
-                # Fetch new metrics if available, else calculate/default
-                ev = r.expectancy if r.expectancy else ((wr/100) * 0.85) - (((100-wr)/100) * 1.0)
-                kelly = r.kelly if r.kelly else 0.0
-                mdd = r.max_drawdown if r.max_drawdown else 0.0
-
-                strat = r.strategy_type if r.strategy_type else "Legacy (Reversal)"
-
-                data.append({
-                    'symbol': r.symbol,
-                    'strategy_type': strat,
-                    'win_rate': wr,
-                    'expectancy': ev,
-                    'kelly': kelly,
-                    'max_drawdown': mdd,
-                    'optimal_duration': r.optimal_duration,
-                    'last_updated': r.last_updated
-                })
-
-            return data, f" Page {page_current + 1}"
+            return dff.to_dict('records'), f" Page {page_current + 1}"
 
     except Exception as e:
         print(f"Error fetching portfolio: {e}")
