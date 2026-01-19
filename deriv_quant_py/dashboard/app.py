@@ -99,7 +99,8 @@ def backtest_layout():
             ], width=3),
             dbc.Col([
                  dbc.Button("Run Grid Search", id="bt-run-btn", color="primary", className="me-2"),
-                 dbc.Button("Run Full System Scan", id="bt-scan-btn", color="danger"),
+                 dbc.Button("Run Full System Scan", id="bt-scan-btn", color="danger", className="me-2"),
+                 dbc.Button("Resume Scan", id="bt-resume-btn", color="warning"),
             ], width=6)
         ], className="mb-3"),
 
@@ -195,10 +196,11 @@ def update_bt_symbol_options(n):
     Output("scan-status-text", "children", allow_duplicate=True),
     Input("bt-run-btn", "n_clicks"),
     Input("bt-scan-btn", "n_clicks"),
+    Input("bt-resume-btn", "n_clicks"),
     State("bt-symbol", "value"),
     prevent_initial_call=True
 )
-def run_backtest_actions(n_grid, n_scan, symbol):
+def run_backtest_actions(n_grid, n_scan, n_resume, symbol):
     ctx = dash.callback_context
     if not ctx.triggered:
         return no_update, no_update, no_update
@@ -216,6 +218,11 @@ def run_backtest_actions(n_grid, n_scan, symbol):
         # Trigger Full Scan
         state.set_backtest_request("FULL_SCAN")
         return go.Figure(layout={'title': 'Full System Scan Initiated...', 'template': 'plotly_dark'}), {"display": "flex", "height": "20px"}, "Starting Scan..."
+
+    elif "bt-resume-btn" in trig_id:
+        # Trigger Resume Scan
+        state.set_backtest_request("FULL_SCAN_RESUME")
+        return go.Figure(layout={'title': 'Resuming Scan...', 'template': 'plotly_dark'}), {"display": "flex", "height": "20px"}, "Resuming Scan..."
 
     return no_update, no_update, no_update
 

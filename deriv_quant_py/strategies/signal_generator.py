@@ -74,6 +74,10 @@ class SignalGenerator:
             result = self._analyze_ema_pullback(df, config)
         elif strategy_type == 'MTF_TREND':
             result = self._analyze_mtf_trend(df, config)
+        elif strategy_type == 'STREAK_EXHAUSTION':
+            result = self._analyze_streak_exhaustion(df, config)
+        elif strategy_type == 'VOL_SQUEEZE':
+            result = self._analyze_vol_squeeze(df, config)
         elif strategy_type == 'TREND': # Legacy MACD
             result = self._analyze_trend(df, config)
         else: # Default/Legacy REVERSAL
@@ -112,6 +116,8 @@ class SignalGenerator:
             elif strat_type == 'PARABOLIC_SAR': res = self._analyze_psar(df, member_config)
             elif strat_type == 'EMA_PULLBACK': res = self._analyze_ema_pullback(df, member_config)
             elif strat_type == 'MTF_TREND': res = self._analyze_mtf_trend(df, member_config)
+            elif strat_type == 'STREAK_EXHAUSTION': res = self._analyze_streak_exhaustion(df, member_config)
+            elif strat_type == 'VOL_SQUEEZE': res = self._analyze_vol_squeeze(df, member_config)
 
             if res and res['signal']:
                 votes.append(res['signal'])
@@ -813,5 +819,98 @@ class SignalGenerator:
                 'ema_local': val_local,
                 'rsi': val_rsi,
                 'strategy': 'MTF_TREND'
+            }
+        } if signal else None
+
+    def _analyze_streak_exhaustion(self, df, config):
+        streak_len = int(config.get('streak_length', 7))
+        rsi_thresh = int(config.get('rsi_threshold', 80))
+
+        if len(df) < streak_len + 2: return None
+
+        # Check Streak
+        # Get last 'streak_len' candles
+        subset = df.iloc[-streak_len:]
+        is_all_green = (subset['close'] > subset['open']).all()
+        is_all_red = (subset['close'] < subset['open']).all()
+
+        # Check RSI (2)
+        rsi = ta.rsi(df['close'], length=2)
+        if rsi is None: return None
+        cur_rsi = rsi.iloc[-1]
+
+        current_price = df['close'].iloc[-1]
+
+        signal = None
+        reason = ""
+
+        if is_all_green and cur_rsi > rsi_thresh:
+            signal = 'PUT'
+            reason = f"Streak {streak_len} Green + RSI {cur_rsi:.1f} > {rsi_thresh}"
+        elif is_all_red and cur_rsi < (100 - rsi_thresh):
+            signal = 'CALL'
+            reason = f"Streak {streak_len} Red + RSI {cur_rsi:.1f} < {100-rsi_thresh}"
+
+        return {
+            'signal': signal,
+            'reason': reason,
+            'price': current_price,
+            'analysis': {
+                'streak_len': streak_len,
+                'rsi_2': cur_rsi,
+                'strategy': 'STREAK_EXHAUSTION'
+            }
+        } if signal else None
+
+    def _analyze_vol_squeeze(self, df, config):
+        lookback = int(config.get('squeeze_lookback', 20))
+        bb_len = int(config.get('bb_length', 20))
+        bb_std = float(config.get('bb_std', 2.0))
+
+        if len(df) < lookback + 5: return None
+
+        bb = ta.bbands(df['close'], length=bb_len, std=bb_std)
+        if bb is None: return None
+        upper = bb.iloc[:, 2]
+        lower = bb.iloc[:, 0]
+
+        bb_width = (upper - lower) / df['close']
+
+        # Check if we are/were in a squeeze (Low Volatility)
+        # We check the last 3 candles for a minimum width event
+        # Note: 'recent_width' slice logic needs care.
+        # last 3: -3, -2, -1.
+        recent_width = bb_width.iloc[-3:]
+
+        # History excluding recent 3
+        hist_min = bb_width.iloc[-(lookback+3):-3].min()
+
+        # Squeeze if any recent width <= historical min + tolerance
+        is_squeezing = (recent_width <= hist_min + 0.00001).any()
+
+        current_close = df['close'].iloc[-1]
+        current_upper = upper.iloc[-1]
+        current_lower = lower.iloc[-1]
+
+        signal = None
+        reason = ""
+
+        if is_squeezing:
+            if current_close > current_upper:
+                signal = 'CALL'
+                reason = "Vol Squeeze Breakout: Recent Squeeze + Break Upper"
+            elif current_close < current_lower:
+                signal = 'PUT'
+                reason = "Vol Squeeze Breakout: Recent Squeeze + Break Lower"
+
+        return {
+            'signal': signal,
+            'reason': reason,
+            'price': current_close,
+            'analysis': {
+                'is_squeezing': bool(is_squeezing),
+                'bb_upper': current_upper,
+                'bb_lower': current_lower,
+                'strategy': 'VOL_SQUEEZE'
             }
         } if signal else None
