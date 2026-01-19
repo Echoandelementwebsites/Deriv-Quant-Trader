@@ -68,7 +68,10 @@ def run_backend():
                     # Run in background to not block loop?
                     # Since this is the main loop, we can await it, but it blocks engine updates for seconds/minutes.
                     # Ideally create_task, but run_full_scan is async.
-                    asyncio.create_task(backtester.run_full_scan())
+                    asyncio.create_task(backtester.run_full_scan(resume=False))
+                elif bt_req == "FULL_SCAN_RESUME":
+                     logger.info("Resuming System Scan...")
+                     asyncio.create_task(backtester.run_full_scan(resume=True))
                 else:
                     logger.info(f"Running WFA for {bt_req}...")
                     df = await backtester.fetch_history_paginated(bt_req, months=1)

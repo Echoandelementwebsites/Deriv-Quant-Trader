@@ -85,4 +85,10 @@ def init_db(db_url):
             if 'max_drawdown' not in columns:
                 conn.execute(text("ALTER TABLE strategy_params ADD COLUMN max_drawdown FLOAT DEFAULT 0.0"))
 
+            # Add Index on last_updated for Resume Scan
+            try:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_last_updated ON strategy_params (last_updated)"))
+            except Exception:
+                pass
+
     return sessionmaker(bind=engine)

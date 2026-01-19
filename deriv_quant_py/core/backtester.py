@@ -346,15 +346,69 @@ class Backtester:
         put_signal = (df['close'] < df['EMA_MTF']) & (df['close'] < df['EMA_Local']) & (df['RSI'] < 50)
         return call_signal.fillna(False), put_signal.fillna(False)
 
+    def _gen_signals_streak_exhaustion(self, df, params):
+        df = df.copy()
+        streak_len = int(params.get('streak_length', 7))
+        rsi_thresh = int(params.get('rsi_threshold', 80))
+
+        # 1 = Green, -1 = Red
+        direction = np.where(df['close'] > df['open'], 1, -1)
+        direction_series = pd.Series(direction, index=df.index)
+
+        # Rolling Min/Max to detect streaks
+        roll_min = direction_series.rolling(window=streak_len).min() # All 1s -> Min is 1
+        roll_max = direction_series.rolling(window=streak_len).max() # All -1s -> Max is -1
+
+        rsi = ta.rsi(df['close'], length=2) # Fast RSI
+
+        # PUT if Streak Green (1) & Overbought
+        put_signal = (roll_min == 1) & (rsi > rsi_thresh)
+        # CALL if Streak Red (-1) & Oversold
+        call_signal = (roll_max == -1) & (rsi < (100 - rsi_thresh))
+
+        return call_signal.fillna(False), put_signal.fillna(False)
+
+    def _gen_signals_vol_squeeze(self, df, params):
+        df = df.copy()
+        lookback = int(params.get('squeeze_lookback', 20))
+        bb_len = int(params.get('bb_length', 20))
+        bb_std = float(params.get('bb_std', 2.0))
+
+        # BB
+        bb = ta.bbands(df['close'], length=bb_len, std=bb_std)
+        if bb is None: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
+        upper = bb.iloc[:, 2]
+        lower = bb.iloc[:, 0]
+
+        # BB Width & Squeeze
+        bb_width = (upper - lower) / df['close']
+        # Check if current width is the lowest in 'lookback' candles
+        min_width = bb_width.rolling(window=lookback).min()
+        is_squeeze = bb_width <= min_width + 0.00001 # Floating point tolerance
+
+        # Trigger: Squeeze occurred recently (last 3 candles) AND Price breaks band
+        recent_squeeze = is_squeeze.rolling(window=3).max() > 0
+
+        call_signal = recent_squeeze & (df['close'] > upper)
+        put_signal = recent_squeeze & (df['close'] < lower)
+
+        return call_signal.fillna(False), put_signal.fillna(False)
+
     def get_strategy_candidates(self, symbol):
         """Returns list of strategy types to test based on asset class."""
-        if symbol.startswith('frx') or symbol.startswith('OTC_'):
-            return ['EMA_PULLBACK', 'BB_REVERSAL']
+        if any(x in symbol for x in ['R_', '1HZ']):
+            # Synthetics (The "Binary Alpha" Focus)
+            return ['MTF_TREND', 'SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT', 'STREAK_EXHAUSTION', 'VOL_SQUEEZE']
+        elif symbol.startswith('frx') or symbol.startswith('OTC_'):
+            # Forex & OTC
+            return ['EMA_PULLBACK', 'BB_REVERSAL', 'STREAK_EXHAUSTION']
         elif any(x in symbol for x in ['stp', 'JD']):
-             return ['PARABOLIC_SAR', 'SUPERTREND']
+             # Step & Jump
+             return ['PARABOLIC_SAR', 'SUPERTREND', 'VOL_SQUEEZE']
         elif any(x in symbol for x in ['CRASH', 'BOOM', 'RDBULL', 'RDBEAR']):
              return ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'PARABOLIC_SAR']
         else:
+             # Default fallback (Synthetics logic usually)
              return ['MTF_TREND', 'SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT']
 
     def run_wfa_optimization(self, df, symbol=""):
@@ -400,6 +454,12 @@ class Backtester:
             },
             'MTF_TREND': {
                 'mtf_ema': [1000, 2000, 3000], 'local_ema': [50, 100], 'duration': durations
+            },
+            'STREAK_EXHAUSTION': {
+                'streak_length': [5, 7, 9], 'rsi_threshold': [80, 85, 90], 'duration': durations
+            },
+            'VOL_SQUEEZE': {
+                'squeeze_lookback': [20, 30, 50], 'bb_length': [20], 'bb_std': [2.0], 'duration': durations
             }
         }
 
@@ -453,6 +513,8 @@ class Backtester:
                     elif strat_type == 'PARABOLIC_SAR': call, put = self._gen_signals_psar(train_df, params)
                     elif strat_type == 'EMA_PULLBACK': call, put = self._gen_signals_ema_pullback(train_df, params)
                     elif strat_type == 'MTF_TREND': call, put = self._gen_signals_mtf_trend(train_df, params)
+                    elif strat_type == 'STREAK_EXHAUSTION': call, put = self._gen_signals_streak_exhaustion(train_df, params)
+                    elif strat_type == 'VOL_SQUEEZE': call, put = self._gen_signals_vol_squeeze(train_df, params)
                     else: continue
 
                     metrics = self.calculate_advanced_metrics(train_df, call, put, params['duration'], symbol)
@@ -476,7 +538,18 @@ class Backtester:
 
             # Sort by EV
             tournament_results.sort(key=lambda x: x['ev'], reverse=True)
-            top_3 = tournament_results[:3]
+
+            # --- NEW LOGIC: Select Unique Strategy Types ---
+            unique_top_candidates = []
+            seen_types = set()
+            for res in tournament_results:
+                if res['type'] not in seen_types:
+                    unique_top_candidates.append(res)
+                    seen_types.add(res['type'])
+                if len(unique_top_candidates) >= 3: break
+
+            if not unique_top_candidates: continue
+            top_3 = unique_top_candidates
 
             best_window_strategy = top_3[0] # Default to best single
 
@@ -595,6 +668,8 @@ class Backtester:
         elif strat_type == 'PARABOLIC_SAR': return self._gen_signals_psar(df, params)
         elif strat_type == 'EMA_PULLBACK': return self._gen_signals_ema_pullback(df, params)
         elif strat_type == 'MTF_TREND': return self._gen_signals_mtf_trend(df, params)
+        elif strat_type == 'STREAK_EXHAUSTION': return self._gen_signals_streak_exhaustion(df, params)
+        elif strat_type == 'VOL_SQUEEZE': return self._gen_signals_vol_squeeze(df, params)
         return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
 
     def calculate_final_metrics_from_pnl(self, pnl_series, symbol):
@@ -623,8 +698,8 @@ class Backtester:
 
         return {
             'ev': ev,
-            'kelly': kelly * 100, # Percentage
-            'max_drawdown': max_dd * 100, # Percentage
+            'kelly': kelly, # Store as raw ratio
+            'max_drawdown': max_dd, # Store as raw ratio
             'win_rate': win_rate * 100,
             'signals': int(total)
         }
@@ -666,7 +741,7 @@ class Backtester:
         finally:
             session.close()
 
-    async def run_full_scan(self):
+    async def run_full_scan(self, resume=False):
         # Same as before
         scanner_data = state.get_scanner_data()
         all_symbols = []
@@ -680,10 +755,26 @@ class Backtester:
             state.update_scan_progress(0, 0, None, "complete")
             return
 
-        logger.info(f"Starting WFA Scan on {total} symbols...")
+        logger.info(f"Starting WFA Scan on {total} symbols (Resume={resume})...")
+
+        # For resume functionality
+        session = self.SessionLocal()
+        from datetime import datetime, timedelta
 
         for i, symbol in enumerate(all_symbols):
             state.update_scan_progress(total, i + 1, symbol, "running")
+
+            # Resume Logic: Skip if updated < 24h ago
+            if resume:
+                try:
+                    existing = session.query(StrategyParams).filter_by(symbol=symbol).first()
+                    if existing and existing.last_updated:
+                        # Check age
+                        age = datetime.utcnow() - existing.last_updated
+                        if age.total_seconds() < 86400: # 24 hours
+                             continue # Skip
+                except Exception as e:
+                    logger.error(f"Error checking resume status for {symbol}: {e}")
 
             try:
                 df = await self.fetch_history_paginated(symbol, months=1)
@@ -701,6 +792,8 @@ class Backtester:
 
             except Exception as e:
                 logger.error(f"Error scanning {symbol}: {e}")
+
+        session.close()
 
         state.update_scan_progress(total, total, None, "complete")
         logger.info("WFA Scan Complete.")
