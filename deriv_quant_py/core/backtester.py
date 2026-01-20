@@ -12,6 +12,8 @@ import numpy as np
 import json
 import itertools
 from itertools import combinations
+import importlib.util
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -463,7 +465,19 @@ class Backtester:
             }
         }
 
+        # Check for AI Generated Strategy
+        ai_path = f"deriv_quant_py/strategies/generated/{symbol}_ai.py"
+        if os.path.exists(ai_path):
+            strategies['AI_GENERATED'] = {
+                'duration': durations,
+                'symbol': [symbol] # Pass symbol to dispatch
+            }
+
         candidates_types = self.get_strategy_candidates(symbol)
+
+        # Add AI_GENERATED to candidates if it exists
+        if 'AI_GENERATED' in strategies:
+            candidates_types.append('AI_GENERATED')
 
         def get_combinations(grid):
             keys = grid.keys()
@@ -515,6 +529,7 @@ class Backtester:
                     elif strat_type == 'MTF_TREND': call, put = self._gen_signals_mtf_trend(train_df, params)
                     elif strat_type == 'STREAK_EXHAUSTION': call, put = self._gen_signals_streak_exhaustion(train_df, params)
                     elif strat_type == 'VOL_SQUEEZE': call, put = self._gen_signals_vol_squeeze(train_df, params)
+                    elif strat_type == 'AI_GENERATED': call, put = self._dispatch_signal('AI_GENERATED', train_df, params)
                     else: continue
 
                     metrics = self.calculate_advanced_metrics(train_df, call, put, params['duration'], symbol)
@@ -659,6 +674,26 @@ class Backtester:
         return None
 
     def _dispatch_signal(self, strat_type, df, params):
+        # 1. DeepSeek Strategy Dispatch
+        if strat_type == 'AI_GENERATED':
+            symbol = params.get('symbol')
+            try:
+                module_path = f"deriv_quant_py/strategies/generated/{symbol}_ai.py"
+
+                # Dynamic Import
+                spec = importlib.util.spec_from_file_location(f"{symbol}_ai", module_path)
+                if spec is None: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
+
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+
+                # Execute logic
+                return module.strategy_logic(df)
+            except Exception as e:
+                # Log error and fallback
+                logger.error(f"Error executing AI strategy for {symbol}: {e}")
+                return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
+
         if strat_type == 'BB_REVERSAL': return self._gen_signals_bb_reversal(df, params)
         elif strat_type == 'SUPERTREND': return self._gen_signals_supertrend(df, params)
         elif strat_type == 'TREND_HEIKIN_ASHI': return self._gen_signals_trend_ha(df, params)
