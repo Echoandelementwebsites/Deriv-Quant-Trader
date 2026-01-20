@@ -8,3 +8,4 @@ plotly
 sqlalchemy
 python-dotenv
 numpy
+openai

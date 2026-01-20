@@ -8,6 +8,7 @@ class Config:
     DERIV_TOKEN = os.getenv("DERIV_TOKEN")
     DERIV_APP_ID = os.getenv("DERIV_APP_ID", "1089")
     WEBSOCKET_URL = f"wss://ws.binaryws.com/websockets/v3?app_id={DERIV_APP_ID}"
+    DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
     # Trading
     TRADING_ACTIVE = os.getenv("TRADING_ACTIVE", "False").lower() == "true"

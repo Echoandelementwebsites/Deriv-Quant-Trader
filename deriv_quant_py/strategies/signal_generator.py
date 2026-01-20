@@ -4,6 +4,11 @@ import numpy as np
 import json
 from deriv_quant_py.utils.indicators import calculate_ema, calculate_rsi, calculate_adx, detect_patterns, calculate_chop
 from deriv_quant_py.config import Config
+import importlib.util
+import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 class SignalGenerator:
     def __init__(self):
@@ -56,6 +61,8 @@ class SignalGenerator:
         # 1. Check for Ensemble Mode
         if config.get('mode') == 'ENSEMBLE':
             result = self._analyze_ensemble(df, config.get('members', []))
+        elif strategy_type == 'AI_GENERATED':
+            result = self._analyze_ai_generated(df, params)
         elif strategy_type == 'SUPERTREND':
             result = self._analyze_supertrend(df, config)
         elif strategy_type == 'BB_REVERSAL':
@@ -96,6 +103,56 @@ class SignalGenerator:
                 return None
 
         return result
+
+    def _analyze_ai_generated(self, df, params):
+        symbol = params.get('symbol')
+        if not symbol: return None
+
+        try:
+            module_path = f"deriv_quant_py/strategies/generated/{symbol}_ai.py"
+
+            # Check if file exists
+            if not os.path.exists(module_path):
+                return None
+
+            # Dynamic Import
+            spec = importlib.util.spec_from_file_location(f"{symbol}_ai", module_path)
+            if spec is None: return None
+
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            # Execute logic (Vectorized)
+            call_series, put_series = module.strategy_logic(df)
+
+            # Get last signal
+            if call_series.empty or put_series.empty:
+                return None
+
+            is_call = call_series.iloc[-1]
+            is_put = put_series.iloc[-1]
+            current_price = df['close'].iloc[-1]
+
+            if is_call:
+                return {
+                    'signal': 'CALL',
+                    'reason': f"AI Generated Strategy ({symbol}) Triggered CALL",
+                    'price': current_price,
+                    'analysis': {'strategy': 'AI_GENERATED'}
+                }
+            elif is_put:
+                return {
+                    'signal': 'PUT',
+                    'reason': f"AI Generated Strategy ({symbol}) Triggered PUT",
+                    'price': current_price,
+                    'analysis': {'strategy': 'AI_GENERATED'}
+                }
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error executing AI strategy in SignalGenerator for {symbol}: {e}")
+            return None
 
     def _analyze_ensemble(self, df, members):
         # Run all member strategies
