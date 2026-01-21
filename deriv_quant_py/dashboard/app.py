@@ -100,8 +100,9 @@ def backtest_layout():
             dbc.Col([
                  dbc.Button("Run Grid Search", id="bt-run-btn", color="primary", className="me-2"),
                  dbc.Button("Run Full System Scan", id="bt-scan-btn", color="danger", className="me-2"),
-                 dbc.Button("Resume Scan", id="bt-resume-btn", color="warning"),
-            ], width=6)
+                 dbc.Button("Resume Scan", id="bt-resume-btn", color="warning", className="me-2"),
+                 dbc.Button("Run AI Research", id="btn-ai-research", color="info", className="me-2"),
+            ], width=8)
         ], className="mb-3"),
 
         # Scan Progress Bar
@@ -197,10 +198,11 @@ def update_bt_symbol_options(n):
     Input("bt-run-btn", "n_clicks"),
     Input("bt-scan-btn", "n_clicks"),
     Input("bt-resume-btn", "n_clicks"),
+    Input("btn-ai-research", "n_clicks"),
     State("bt-symbol", "value"),
     prevent_initial_call=True
 )
-def run_backtest_actions(n_grid, n_scan, n_resume, symbol):
+def run_backtest_actions(n_grid, n_scan, n_resume, n_ai, symbol):
     ctx = dash.callback_context
     if not ctx.triggered:
         return no_update, no_update, no_update
@@ -223,6 +225,11 @@ def run_backtest_actions(n_grid, n_scan, n_resume, symbol):
         # Trigger Resume Scan
         state.set_backtest_request("FULL_SCAN_RESUME")
         return go.Figure(layout={'title': 'Resuming Scan...', 'template': 'plotly_dark'}), {"display": "flex", "height": "20px"}, "Resuming Scan..."
+
+    elif "btn-ai-research" in trig_id:
+        # Trigger AI Research
+        state.set_backtest_request("AI_RESEARCH_START")
+        return go.Figure(layout={'title': 'AI Research Initiated...', 'template': 'plotly_dark'}), {"display": "flex", "height": "20px"}, "Starting AI Research..."
 
     return no_update, no_update, no_update
 
