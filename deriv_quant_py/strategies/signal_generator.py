@@ -62,7 +62,12 @@ class SignalGenerator:
         if config.get('mode') == 'ENSEMBLE':
             result = self._analyze_ensemble(df, config.get('members', []))
         elif strategy_type == 'AI_GENERATED':
-            result = self._analyze_ai_generated(df, params)
+            # Fallback: Derive filename from symbol param
+            strat_name = f"{params.get('symbol')}_ai"
+            result = self._analyze_ai_generated(df, params, strat_name)
+        elif strategy_type.endswith('_ai'):
+            # New Standard
+            result = self._analyze_ai_generated(df, params, strategy_type)
         elif strategy_type == 'SUPERTREND':
             result = self._analyze_supertrend(df, config)
         elif strategy_type == 'BB_REVERSAL':
@@ -104,19 +109,22 @@ class SignalGenerator:
 
         return result
 
-    def _analyze_ai_generated(self, df, params):
+    def _analyze_ai_generated(self, df, params, strat_name=None):
         symbol = params.get('symbol')
         if not symbol: return None
 
+        if not strat_name:
+             strat_name = f"{symbol}_ai" # Legacy fallback
+
         try:
-            module_path = f"deriv_quant_py/strategies/generated/{symbol}_ai.py"
+            module_path = f"deriv_quant_py/strategies/generated/{strat_name}.py"
 
             # Check if file exists
             if not os.path.exists(module_path):
                 return None
 
             # Dynamic Import
-            spec = importlib.util.spec_from_file_location(f"{symbol}_ai", module_path)
+            spec = importlib.util.spec_from_file_location(strat_name, module_path)
             if spec is None: return None
 
             module = importlib.util.module_from_spec(spec)
@@ -136,16 +144,16 @@ class SignalGenerator:
             if is_call:
                 return {
                     'signal': 'CALL',
-                    'reason': f"AI Generated Strategy ({symbol}) Triggered CALL",
+                    'reason': f"{strat_name} Trigger",
                     'price': current_price,
-                    'analysis': {'strategy': 'AI_GENERATED'}
+                    'analysis': {'strategy': strat_name}
                 }
             elif is_put:
                 return {
                     'signal': 'PUT',
-                    'reason': f"AI Generated Strategy ({symbol}) Triggered PUT",
+                    'reason': f"{strat_name} Trigger",
                     'price': current_price,
-                    'analysis': {'strategy': 'AI_GENERATED'}
+                    'analysis': {'strategy': strat_name}
                 }
 
             return None
