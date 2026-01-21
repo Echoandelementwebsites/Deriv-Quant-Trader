@@ -22,6 +22,50 @@ class Backtester:
         self.client = client
         self.SessionLocal = init_db(Config.DB_PATH)
 
+        # Default Strategy Configuration Grid
+        default_durations = [1, 2, 3, 5, 10, 15]
+        default_st_mult = [2.0, 3.0]
+
+        self.strategies = {
+            'SUPERTREND': {
+                'length': [10, 14], 'multiplier': default_st_mult, 'adx_threshold': [20, 25, 30], 'trend_ema': [100, 200], 'duration': default_durations
+            },
+            'TREND_HEIKIN_ASHI': {
+                'ema_period': [50, 100, 200], 'adx_threshold': [20, 25], 'rsi_max': [70, 75, 80], 'duration': default_durations
+            },
+            'BB_REVERSAL': {
+                'bb_length': [20], 'bb_std': [2.0, 2.5], 'rsi_period': [14], 'stoch_oversold': [15, 20], 'stoch_overbought': [80, 85], 'duration': default_durations
+            },
+            'BREAKOUT': {
+                'rsi_entry_bull': [50, 55], 'rsi_entry_bear': [45, 50], 'duration': default_durations
+            },
+            'ICHIMOKU': {
+                'tenkan': [9], 'kijun': [26], 'senkou_b': [52], 'duration': default_durations
+            },
+            'EMA_CROSS': {
+                'ema_fast': [9, 20], 'ema_slow': [50, 100, 200], 'duration': default_durations
+            },
+            'PARABOLIC_SAR': {
+                'af': [0.01, 0.02, 0.03], 'max_af': [0.2], 'adx_threshold': [20, 25], 'duration': default_durations
+            },
+            'EMA_PULLBACK': {
+                'ema_trend': [200], 'ema_pullback': [20, 50], 'rsi_limit': [55, 60, 65], 'duration': default_durations
+            },
+            'MTF_TREND': {
+                'mtf_ema': [1000, 2000, 3000], 'local_ema': [50, 100], 'duration': default_durations
+            },
+            'STREAK_EXHAUSTION': {
+                'streak_length': [5, 7, 9], 'rsi_threshold': [80, 85, 90], 'duration': default_durations
+            },
+            'VOL_SQUEEZE': {
+                'squeeze_lookback': [20, 30, 50], 'bb_length': [20], 'bb_std': [2.0], 'duration': default_durations
+            },
+            'AI_GENERATED': {
+                'duration': default_durations,
+                'symbol': []
+            }
+        }
+
     async def fetch_history_paginated(self, symbol, months=1):
         """
         Fetches historical data by paging backwards.
@@ -398,20 +442,35 @@ class Backtester:
 
     def get_strategy_candidates(self, symbol):
         """Returns list of strategy types to test based on asset class."""
+        candidates = []
         if any(x in symbol for x in ['R_', '1HZ']):
             # Synthetics (The "Binary Alpha" Focus)
-            return ['MTF_TREND', 'SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT', 'STREAK_EXHAUSTION', 'VOL_SQUEEZE']
+            candidates = ['MTF_TREND', 'SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT', 'STREAK_EXHAUSTION', 'VOL_SQUEEZE']
         elif symbol.startswith('frx') or symbol.startswith('OTC_'):
             # Forex & OTC
-            return ['EMA_PULLBACK', 'BB_REVERSAL', 'STREAK_EXHAUSTION']
+            candidates = ['EMA_PULLBACK', 'BB_REVERSAL', 'STREAK_EXHAUSTION']
         elif any(x in symbol for x in ['stp', 'JD']):
              # Step & Jump
-             return ['PARABOLIC_SAR', 'SUPERTREND', 'VOL_SQUEEZE']
+             candidates = ['PARABOLIC_SAR', 'SUPERTREND', 'VOL_SQUEEZE']
         elif any(x in symbol for x in ['CRASH', 'BOOM', 'RDBULL', 'RDBEAR']):
-             return ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'PARABOLIC_SAR']
+             candidates = ['SUPERTREND', 'TREND_HEIKIN_ASHI', 'PARABOLIC_SAR']
         else:
              # Default fallback (Synthetics logic usually)
-             return ['MTF_TREND', 'SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT']
+             candidates = ['MTF_TREND', 'SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT']
+
+        # Check for AI File with UNDERSCORE naming
+        ai_strat_name = f"{symbol}_ai" # e.g., 'frxEURJPY_ai'
+
+        # Check if file exists
+        if os.path.exists(f"deriv_quant_py/strategies/generated/{ai_strat_name}.py"):
+            candidates.append(ai_strat_name)
+
+            # Register in strategies grid if missing
+            if ai_strat_name not in self.strategies:
+                 # Inherit duration from a default or set specifically
+                 self.strategies[ai_strat_name] = {'duration': self.strategies.get('AI_GENERATED', {}).get('duration', [1, 2, 3])}
+
+        return candidates
 
     def run_wfa_optimization(self, df, symbol=""):
         TRAIN_SIZE = 3000
@@ -422,62 +481,31 @@ class Backtester:
             logger.info(f"Not enough data for Rolling WFA. Needed {TRAIN_SIZE+TEST_SIZE}, got {len(df)}")
             return None
 
-        # 1. Define Grids (same as before)
+        # 1. Define Grids (Update class strategies based on symbol)
         if '1HZ' in symbol: durations = [1, 2]
         else: durations = [1, 2, 3, 5, 10, 15]
 
         if 'JD' in symbol: st_multipliers = [2.0, 3.0, 4.0]
         else: st_multipliers = [2.0, 3.0]
 
-        strategies = {
-            'SUPERTREND': {
-                'length': [10, 14], 'multiplier': st_multipliers, 'adx_threshold': [20, 25, 30], 'trend_ema': [100, 200], 'duration': durations
-            },
-            'TREND_HEIKIN_ASHI': {
-                'ema_period': [50, 100, 200], 'adx_threshold': [20, 25], 'rsi_max': [70, 75, 80], 'duration': durations
-            },
-            'BB_REVERSAL': {
-                'bb_length': [20], 'bb_std': [2.0, 2.5], 'rsi_period': [14], 'stoch_oversold': [15, 20], 'stoch_overbought': [80, 85], 'duration': durations
-            },
-            'BREAKOUT': {
-                'rsi_entry_bull': [50, 55], 'rsi_entry_bear': [45, 50], 'duration': durations
-            },
-            'ICHIMOKU': {
-                'tenkan': [9], 'kijun': [26], 'senkou_b': [52], 'duration': durations
-            },
-            'EMA_CROSS': {
-                'ema_fast': [9, 20], 'ema_slow': [50, 100, 200], 'duration': durations
-            },
-            'PARABOLIC_SAR': {
-                'af': [0.01, 0.02, 0.03], 'max_af': [0.2], 'adx_threshold': [20, 25], 'duration': durations
-            },
-            'EMA_PULLBACK': {
-                'ema_trend': [200], 'ema_pullback': [20, 50], 'rsi_limit': [55, 60, 65], 'duration': durations
-            },
-            'MTF_TREND': {
-                'mtf_ema': [1000, 2000, 3000], 'local_ema': [50, 100], 'duration': durations
-            },
-            'STREAK_EXHAUSTION': {
-                'streak_length': [5, 7, 9], 'rsi_threshold': [80, 85, 90], 'duration': durations
-            },
-            'VOL_SQUEEZE': {
-                'squeeze_lookback': [20, 30, 50], 'bb_length': [20], 'bb_std': [2.0], 'duration': durations
-            }
-        }
+        # Update self.strategies in place
+        for s_name, s_grid in self.strategies.items():
+            if 'duration' in s_grid:
+                s_grid['duration'] = durations
+            if s_name == 'SUPERTREND' and 'multiplier' in s_grid:
+                s_grid['multiplier'] = st_multipliers
 
-        # Check for AI Generated Strategy
+        # Check for Legacy AI Generated Strategy (Fallback)
+        # Note: New discovery logic is in get_strategy_candidates, but we keep this for AI_GENERATED type support
         ai_path = f"deriv_quant_py/strategies/generated/{symbol}_ai.py"
         if os.path.exists(ai_path):
-            strategies['AI_GENERATED'] = {
-                'duration': durations,
-                'symbol': [symbol] # Pass symbol to dispatch
-            }
+            self.strategies['AI_GENERATED']['symbol'] = [symbol]
 
         candidates_types = self.get_strategy_candidates(symbol)
 
-        # Add AI_GENERATED to candidates if it exists
-        if 'AI_GENERATED' in strategies:
-            candidates_types.append('AI_GENERATED')
+        # Add AI_GENERATED to candidates if it exists (legacy fallback)
+        if os.path.exists(ai_path) and 'AI_GENERATED' not in candidates_types:
+             candidates_types.append('AI_GENERATED')
 
         def get_combinations(grid):
             keys = grid.keys()
@@ -510,15 +538,25 @@ class Backtester:
             tournament_results = [] # [(strat_type, config, ev, call_sig, put_sig)]
 
             for strat_type in candidates_types:
-                if strat_type not in strategies: continue
-                grid = strategies[strat_type]
+                if strat_type not in self.strategies: continue
+                grid = self.strategies[strat_type]
 
                 best_local_ev = -100
                 best_local_res = None # (config, call_sig, put_sig)
 
                 for params in get_combinations(grid):
                     # Dispatch
-                    if strat_type == 'BB_REVERSAL': call, put = self._gen_signals_bb_reversal(train_df, params)
+                    # Note: We now use _dispatch_signal for all dispatching to handle the new AI types and consolidate logic
+                    # But for performance we keep the direct calls for known types, or just use dispatch_signal for everything?
+                    # The prompt implies we should update _dispatch_signal to handle suffixes.
+                    # Let's check if the existing direct calls are faster or if we should switch.
+                    # Direct calls avoid overhead. But we have a mix now.
+                    # The AI logic specifically needs _dispatch_signal for the suffix.
+                    # So we should call _dispatch_signal if it's an AI type.
+
+                    if strat_type.endswith('_ai'):
+                        call, put = self._dispatch_signal(strat_type, train_df, params)
+                    elif strat_type == 'BB_REVERSAL': call, put = self._gen_signals_bb_reversal(train_df, params)
                     elif strat_type == 'SUPERTREND': call, put = self._gen_signals_supertrend(train_df, params)
                     elif strat_type == 'TREND_HEIKIN_ASHI': call, put = self._gen_signals_trend_ha(train_df, params)
                     elif strat_type == 'BREAKOUT': call, put = self._gen_signals_breakout(train_df, params)
@@ -674,9 +712,33 @@ class Backtester:
         return None
 
     def _dispatch_signal(self, strat_type, df, params):
-        # 1. DeepSeek Strategy Dispatch
+        # 1. DeepSeek Strategy Dispatch (New Suffix)
+        if strat_type.endswith('_ai'):
+            try:
+                # Load file: deriv_quant_py/strategies/generated/{strat_type}.py
+                module_path = f"deriv_quant_py/strategies/generated/{strat_type}.py"
+
+                spec = importlib.util.spec_from_file_location(strat_type, module_path)
+                if spec is None: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
+
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+
+                return module.strategy_logic(df)
+            except Exception as e:
+                logger.error(f"Error executing AI strategy {strat_type}: {e}")
+                return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
+
+        # 2. Legacy AI Generated Strategy Dispatch
         if strat_type == 'AI_GENERATED':
             symbol = params.get('symbol')
+            # Handle list if it's coming from grid? No, params is a dict from grid combo.
+            # But params['symbol'] was a list in the grid definition: 'symbol': [symbol].
+            # So params['symbol'] might be the symbol string itself if itertools unpacked it?
+            # itertools.product unzips values. If value was [symbol], then param is symbol.
+            # Let's verify.
+            # 'symbol': [symbol] -> itertools picks one item -> symbol. Correct.
+
             try:
                 module_path = f"deriv_quant_py/strategies/generated/{symbol}_ai.py"
 
