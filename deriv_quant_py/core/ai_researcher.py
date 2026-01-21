@@ -4,69 +4,125 @@ import logging
 import re
 import pandas as pd
 import numpy as np
+import pandas_ta as ta # Required for validation check
 
 logger = logging.getLogger(__name__)
 
 class AIResearcher:
     def __init__(self, api_key):
-        # STRICT: Use DeepSeek Base URL
         self.client = openai.OpenAI(
             api_key=api_key,
             base_url="https://api.deepseek.com"
         )
 
     def generate_strategy(self, symbol, dna_profile):
+        # 1. THE STRICT PROMPT
         system_prompt = """
-        You are a Quant Researcher specializing in Binary Options.
-        Task: Write a Python function `strategy_logic(df)` using `pandas_ta`.
+        You are a Quantitative Researcher. Write a Python function `strategy_logic(df)`.
 
-        CRITICAL OUTPUT RULES:
-        1. Output ONLY valid Python code. No Markdown. No Explanations.
-        2. Function signature: `def strategy_logic(df): -> tuple(pd.Series, pd.Series)` returning (call_signal, put_signal).
-        3. Do not assume 'df' has a datetime index. Use `iloc`.
+        RULES:
+        1. Input: `df` (pandas DataFrame with columns: open, high, low, close).
+        2. Output: Tuple `(call_signal, put_signal)` where both are `pd.Series` of booleans.
+        3. LIB: Use `pandas_ta` extension.
+
+        CRITICAL SYNTAX REQUIREMENTS:
+        - ALWAYS use `append=True` when calculating indicators.
+          Correct: `df.ta.rsi(length=14, append=True)`
+          Incorrect: `rsi = df.ta.rsi(...)`
+        - Access columns using their generated names (e.g., 'RSI_14').
+        - Handle NaN values using `.fillna(False)` on the final result.
+        - Do NOT import libraries inside the function. Assume `pd`, `ta`, `np` are available.
+        - Return strictly: `return call_signal, put_signal`
         """
 
         user_prompt = f"""
         Asset: {symbol}
-        DeepSeek DNA Profile:
-        - Hurst Exponent: {dna_profile['hurst']:.3f} (0.5=Random, >0.5=Trend, <0.5=Reversion)
-        - Noise Index: {dna_profile['noise_index']:.3f} (0=Clean, 1=Noisy)
+        Physics Profile:
+        - Regime: {dna_profile['regime']}
+        - Noise: {dna_profile['noise_index']:.2f} (0=Clean, 1=Noisy)
         - Volatility: {dna_profile['volatility']:.5f}
 
-        Reasoning Task:
-        1. Analyze the Hurst vs Noise level.
-        2. If Hurst > 0.6 and Noise < 0.4: Write a Trend Following strategy (e.g., Supertrend + ADX).
-        3. If Hurst < 0.4 and Noise > 0.6: Write a Mean Reversion strategy (e.g., BB Reversal + RSI).
-        4. If parameters are ambiguous, use the Volatility to adjust lookback periods (Higher Vol = Shorter Lookback).
-
-        Generate the code now.
+        Task: Write the `strategy_logic` function.
+        - If Regime is MEAN_REVERSION: Use RSI or Bollinger Bands.
+        - If Regime is TRENDING: Use Supertrend or EMA Cross.
         """
 
         try:
-            # STRICT: Use 'deepseek-reasoner' for Chain-of-Thought capabilities
             response = self.client.chat.completions.create(
-                model="deepseek-reasoner",
+                model="deepseek-reasoner", # Uses R1 Chain-of-Thought
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.6 # Slightly creative to find novel logic
+                temperature=0.5 # Lower temp for more deterministic code
             )
 
-            # Extract content (DeepSeek R1 puts reasoning in 'reasoning_content' sometimes, but code is in 'content')
-            code = response.choices[0].message.content
+            raw_code = response.choices[0].message.content
+            clean_code = self._sanitize_code(raw_code)
 
-            # Clean Markdown if DeepSeek adds it despite instructions
-            code = self._sanitize_code(code)
+            # 2. THE VALIDATION LAYER
+            is_valid, error_msg = self._validate_code(clean_code)
 
-            self._save_to_file(symbol, code)
-            return True
+            if is_valid:
+                self._save_to_file(symbol, clean_code)
+                logger.info(f"Generated & Validated strategy for {symbol}")
+                return True
+            else:
+                logger.error(f"Strategy Validation Failed for {symbol}: {error_msg}")
+                # Optional: Retry logic could go here
+                return False
+
         except Exception as e:
-            logger.error(f"DeepSeek R1 failed for {symbol}: {e}")
+            logger.error(f"AI Research Error {symbol}: {e}")
             return False
 
+    def _validate_code(self, code_str):
+        """
+        Sandboxes the code to ensure it runs without crashing and returns the correct format.
+        """
+        try:
+            # 1. Create a safe local execution scope
+            # We use a single dictionary for globals/locals to ensure functions
+            # defined in the code can access the imported libraries.
+            scope = {}
+
+            # Pre-import standard libs into the scope
+            exec("import pandas as pd\nimport pandas_ta as ta\nimport numpy as np", scope)
+
+            # 2. Compile the AI code
+            exec(code_str, scope)
+
+            if 'strategy_logic' not in scope:
+                return False, "Function 'strategy_logic' not defined."
+
+            # 3. Create Dummy Data (Random Walk)
+            np.random.seed(42)
+            prices = np.random.normal(100, 1, 100).cumsum()
+            df = pd.DataFrame({
+                'open': prices,
+                'high': prices + 1,
+                'low': prices - 1,
+                'close': prices
+            })
+
+            # 4. Dry Run
+            # We must pass the df into the function found in the scope
+            call, put = scope['strategy_logic'](df.copy())
+
+            # 5. Check Outputs
+            if not isinstance(call, pd.Series) or not isinstance(put, pd.Series):
+                return False, f"Return types invalid. Got {type(call)}, {type(put)}"
+
+            if len(call) != len(df):
+                return False, "Output Series length mismatch."
+
+            return True, "Passed"
+
+        except Exception as e:
+            return False, f"Runtime Error: {str(e)}"
+
     def _sanitize_code(self, code):
-        # Remove ```python and ``` tags
+        # Remove Markdown wrappers
         pattern = r"```python(.*?)```"
         match = re.search(pattern, code, re.DOTALL)
         if match:
@@ -74,9 +130,9 @@ class AIResearcher:
         return code.replace("```", "").strip()
 
     def _save_to_file(self, symbol, code):
-        directory = "deriv_quant_py/strategies/generated"
-        os.makedirs(directory, exist_ok=True)
-        path = f"{directory}/{symbol}_ai.py"
+        # Enforce the naming convention
+        path = f"deriv_quant_py/strategies/generated/{symbol}_ai.py"
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             f.write("import pandas as pd\nimport pandas_ta as ta\nimport numpy as np\n\n")
             f.write(code)
