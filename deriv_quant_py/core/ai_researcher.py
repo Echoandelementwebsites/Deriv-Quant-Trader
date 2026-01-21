@@ -17,35 +17,68 @@ class AIResearcher:
         )
 
     def generate_strategy(self, symbol, dna_profile, max_retries=3):
-        # 1. THE STRICT PROMPT
+        # 1. THE ENHANCED SYSTEM PROMPT (With Docs & One-Shot Example)
         system_prompt = """
-        You are a Quantitative Researcher. Write a Python function `strategy_logic(df)`.
+        You are a Senior Quantitative Developer. Write a Python function `strategy_logic(df)`.
 
-        RULES:
-        1. Input: `df` (pandas DataFrame with columns: open, high, low, close).
-        2. Output: Tuple `(call_signal, put_signal)` where both are `pd.Series` of booleans.
-        3. LIB: Use `pandas_ta` extension.
+        ### REFERENCE DOCUMENTATION
+        - Pandas TA Lib: https://github.com/twopirllc/pandas-ta
+        - Pandas Docs: https://pandas.pydata.org/docs/
 
-        CRITICAL SYNTAX REQUIREMENTS:
-        - ALWAYS use `append=True` when calculating indicators. 
-          Example: `df.ta.rsi(length=14, append=True)`
-        - Access columns using their generated names (e.g., 'RSI_14').
-        - Handle NaN values using `.fillna(False)` on the final result.
-        - Do NOT import libraries inside the function. Assume `pd`, `ta`, `np` are available.
-        - Return strictly: `return call_signal, put_signal`
+        ### LIBRARY CONTEXT
+        - Library: `pandas_ta` (standard naming convention).
+        - Input: `df` (columns: open, high, low, close).
+        - Output: Tuple `(call_signal, put_signal)` where both are `pd.Series` of booleans.
+
+        ### CRITICAL SYNTAX RULES
+        1. **APPEND IS MANDATORY:** Always use `append=True` for indicators.
+           - Correct: `df.ta.bbands(length=20, std=2, append=True)`
+           - Wrong: `bb = df.ta.bbands(...)`
+        2. **COLUMN NAMES:** Pandas TA generates specific names. You must use them.
+           - BBANDS(20, 2) -> `BBL_20_2.0`, `BBM_20_2.0`, `BBU_20_2.0`
+           - RSI(14) -> `RSI_14`
+           - SUPERTREND(7, 3) -> `SUPERT_7_3.0`
+        3. **SAFETY:** Use `.fillna(False)` on final signals. Avoid `inf`.
+
+        ### GOLDEN EXAMPLE (FOLLOW THIS STRUCTURE)
+        def strategy_logic(df):
+            # 1. Calculate Indicators (append=True)
+            df.ta.ema(length=50, append=True)  # Creates 'EMA_50'
+            df.ta.rsi(length=14, append=True)  # Creates 'RSI_14'
+
+            # 2. Define Logic
+            # Trend Condition: Close > EMA
+            trend_up = df['close'] > df['EMA_50']
+
+            # Entry Condition: RSI < 30 (Oversold)
+            entry_long = df['RSI_14'] < 30
+
+            # 3. Generate Signals
+            call_signal = trend_up & entry_long
+            put_signal = (~trend_up) & (df['RSI_14'] > 70)
+
+            # 4. Return safely
+            return call_signal.fillna(False), put_signal.fillna(False)
         """
 
+        # 2. DETAILED CONTEXT PROMPT
         user_prompt = f"""
-        Asset: {symbol}
-        Physics Profile:
-        - Regime: {dna_profile['regime']}
-        - Noise: {dna_profile['noise_index']:.2f} (0=Clean, 1=Noisy)
-        - Volatility: {dna_profile['volatility']:.5f}
+        ### ASSET DNA REPORT: {symbol}
+        1. **Regime:** {dna_profile['regime']} (Hurst={dna_profile['hurst']:.2f})
+           - If TRENDING (Hurst > 0.5): Prioritize breakouts (Donchian, Supertrend).
+           - If REVERSION (Hurst < 0.5): Prioritize oscillators (RSI, Stoch, BB).
 
-        Task: Write the `strategy_logic` function.
-        - If Regime is MEAN_REVERSION: Write a Reversion strategy (e.g., RSI or BB).
-        - If Regime is TRENDING: Write a Trend strategy (e.g., Supertrend or EMA Cross).
-        - Use Volatility to tune lookback periods (Higher Vol = Shorter Lookback).
+        2. **Noise Level:** {dna_profile['noise_index']:.2f} (0.0=Smooth, 1.0=Chaotic)
+           - Current Level: {"HIGH" if dna_profile['noise_index'] > 0.6 else "LOW"}
+           - Instruction: If High Noise, use longer lookback periods or smoothing (EMA/SMA) to filter fakeouts.
+
+        3. **Volatility:** {dna_profile['volatility']:.5f}
+           - Instruction: Use this to tune thresholds. Higher volatility requires wider stop-losses or bands.
+
+        ### TASK
+        Write the `strategy_logic` function for this asset. 
+        Focus on exploiting the identified Regime while mitigating the Noise.
+        OUTPUT ONLY RAW PYTHON CODE. NO MARKDOWN.
         """
 
         messages = [
@@ -58,15 +91,15 @@ class AIResearcher:
                 logger.info(f"AI Generation Attempt {attempt + 1}/{max_retries} for {symbol}...")
 
                 response = self.client.chat.completions.create(
-                    model="deepseek-reasoner",  # Uses R1 Chain-of-Thought
+                    model="deepseek-reasoner",  # DeepSeek-V3.2 Thinking Mode
                     messages=messages,
-                    temperature=0.5
+                    temperature=0.0  # Strict determinism for coding
                 )
 
                 raw_code = response.choices[0].message.content
                 clean_code = self._sanitize_code(raw_code)
 
-                # 2. THE VALIDATION LAYER
+                # 3. VALIDATION LAYER
                 is_valid, error_msg = self._validate_code(clean_code)
 
                 if is_valid:
@@ -75,13 +108,13 @@ class AIResearcher:
                     return True
                 else:
                     logger.warning(f"Attempt {attempt + 1} Failed: {error_msg}")
-                    # Feed the error back to the AI for self-correction
+                    # Feed specific error back to AI
                     messages.append({"role": "assistant", "content": raw_code})
                     messages.append({
                         "role": "user",
-                        "content": f"Your previous code failed validation with error: {error_msg}\n"
-                                   f"CRITICAL: Ensure you use `append=True` in pandas_ta calls and use the correct column names.\n"
-                                   f"Fix the code and output ONLY the corrected Python code."
+                        "content": f"VALIDATION ERROR: {error_msg}\n"
+                                   f"Review the 'CRITICAL SYNTAX RULES'. Did you use the correct column name? "
+                                   f"Did you use `append=True`? Fix the code."
                     })
 
             except Exception as e:
@@ -98,7 +131,6 @@ class AIResearcher:
         try:
             # 1. Create a safe local execution scope
             local_scope = {}
-            # Pre-import standard libs into the scope
             exec("import pandas as pd\nimport pandas_ta as ta\nimport numpy as np", {}, local_scope)
 
             # 2. Compile the AI code
@@ -133,7 +165,6 @@ class AIResearcher:
             return False, f"Runtime Error: {str(e)}"
 
     def _sanitize_code(self, code):
-        # Remove Markdown wrappers
         pattern = r"```python(.*?)```"
         match = re.search(pattern, code, re.DOTALL)
         if match:
