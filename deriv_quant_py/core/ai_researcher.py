@@ -6,6 +6,10 @@ import pandas as pd
 import numpy as np
 import pandas_ta as ta
 import traceback
+import asyncio
+from deriv_quant_py.core.market_physics import MarketPhysics
+from deriv_quant_py.shared_state import state
+from deriv_quant_py.core.scanner import MarketScanner
 
 logger = logging.getLogger(__name__)
 
@@ -177,3 +181,85 @@ class AIResearcher:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             f.write(code)
+
+async def run_research_session(client, backtester, researcher, resume=False):
+    """
+    Centralized logic for running the AI research loop.
+    Used by both main.py (Dashboard) and scripts/run_ai_research.py (CLI).
+    """
+    logger.info(f"Starting AI Research Session (Resume={resume})...")
+
+    # 1. Determine Target Assets
+    # Try dynamic scan first
+    scanner = MarketScanner(client)
+    market_map = await scanner.scan_market()
+
+    target_symbols = []
+    if market_map:
+        for cat, assets in market_map.items():
+            for a in assets:
+                target_symbols.append(a['symbol'])
+        # De-duplicate
+        target_symbols = list(set(target_symbols))
+
+    # Fallback if scan empty
+    if not target_symbols:
+        logger.warning("Market scan returned empty. Using fallback list.")
+        target_symbols = [
+            "R_100", "R_75", "R_50", "R_25", "R_10",
+            "1HZ100V", "1HZ75V", "1HZ50V", "1HZ25V", "1HZ10V",
+            "frxEURUSD", "frxGBPUSD", "frxUSDJPY", "frxAUDUSD",
+            "CRASH_1000", "BOOM_1000", "CRASH_500", "BOOM_500"
+        ]
+
+    # 2. Resume Logic (Filter)
+    if resume:
+        # Resolve path relative to THIS file
+        strategy_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../strategies/generated'))
+        if os.path.exists(strategy_dir):
+            existing = set()
+            for f in os.listdir(strategy_dir):
+                if f.endswith("_ai.py"):
+                    existing.add(f.replace("_ai.py", ""))
+
+            original_count = len(target_symbols)
+            target_symbols = [s for s in target_symbols if s not in existing]
+            logger.info(f"RESUME: Filtered {original_count} -> {len(target_symbols)} assets.")
+        else:
+            logger.warning(f"Strategy dir {strategy_dir} not found. Processing all.")
+
+    if not target_symbols:
+        logger.info("No assets to process. Task Complete.")
+        state.update_scan_progress(100, 100, "All Done", status="complete")
+        return
+
+    # 3. Execution Loop
+    total = len(target_symbols)
+    for i, symbol in enumerate(target_symbols):
+        # Update Dashboard Progress
+        state.update_scan_progress(total, i + 1, symbol, status="running")
+        logger.info(f"AI Researching {symbol} ({i+1}/{total})...")
+
+        try:
+            # A. Fetch History
+            df = await backtester.fetch_history_paginated(symbol, months=1)
+            if df.empty or len(df) < 500:
+                logger.warning(f"Insufficient data for {symbol}. Skipping.")
+                continue
+
+            # B. DNA Analysis
+            dna = MarketPhysics.get_asset_dna(df)
+
+            # C. Generate Strategy
+            success = researcher.generate_strategy(symbol, dna)
+            if success:
+                logger.info(f"SUCCESS: Generated strategy for {symbol}")
+
+            # Rate Limit
+            await asyncio.sleep(1.0)
+
+        except Exception as e:
+            logger.error(f"Error researching {symbol}: {e}")
+
+    state.update_scan_progress(total, total, "Complete", status="complete")
+    logger.info("AI Research Session Completed.")

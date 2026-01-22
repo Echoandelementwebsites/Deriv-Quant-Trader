@@ -102,7 +102,8 @@ def backtest_layout():
                  dbc.Button("Run Full System Scan", id="bt-scan-btn", color="danger", className="me-2"),
                  dbc.Button("Resume Scan", id="bt-resume-btn", color="warning", className="me-2"),
                  dbc.Button("Run AI Research", id="btn-ai-research", color="info", className="me-2"),
-            ], width=8)
+                 dbc.Button("Resume AI Research", id="btn-ai-resume", color="success", className="me-2"),
+            ], width=9)
         ], className="mb-3"),
 
         # Scan Progress Bar
@@ -111,7 +112,7 @@ def backtest_layout():
 
         dcc.Loading(
             html.Div([
-                dcc.Graph(id="bt-chart"),
+                # Obsolete chart removed
                 html.Hr(),
                 html.H4("Global Portfolio Overview"),
 
@@ -192,46 +193,52 @@ def update_bt_symbol_options(n):
     return options
 
 @app.callback(
-    Output("bt-chart", "figure"),
     Output("scan-progress", "style", allow_duplicate=True),
     Output("scan-status-text", "children", allow_duplicate=True),
     Input("bt-run-btn", "n_clicks"),
     Input("bt-scan-btn", "n_clicks"),
     Input("bt-resume-btn", "n_clicks"),
     Input("btn-ai-research", "n_clicks"),
+    Input("btn-ai-resume", "n_clicks"),
     State("bt-symbol", "value"),
     prevent_initial_call=True
 )
-def run_backtest_actions(n_grid, n_scan, n_resume, n_ai, symbol):
+def run_backtest_actions(n_grid, n_scan, n_resume, n_ai, n_ai_resume, symbol):
     ctx = dash.callback_context
     if not ctx.triggered:
-        return no_update, no_update, no_update
+        return no_update, no_update
 
     trig_id = ctx.triggered[0]['prop_id']
+    load_style = {"display": "flex", "height": "20px"}
 
     if "bt-run-btn" in trig_id:
         if not symbol:
-             return go.Figure(layout={'title': 'Please select a symbol', 'template': 'plotly_dark'}), no_update, no_update
+             return no_update, no_update
         # Send Request to Backend
         state.set_backtest_request(symbol)
-        return go.Figure(layout={'title': 'Request Sent... Waiting for result', 'template': 'plotly_dark'}), {"display": "none"}, ""
+        return {"display": "none"}, "Request Sent..."
 
     elif "bt-scan-btn" in trig_id:
         # Trigger Full Scan
         state.set_backtest_request("FULL_SCAN")
-        return go.Figure(layout={'title': 'Full System Scan Initiated...', 'template': 'plotly_dark'}), {"display": "flex", "height": "20px"}, "Starting Scan..."
+        return load_style, "Starting Full Scan..."
 
     elif "bt-resume-btn" in trig_id:
         # Trigger Resume Scan
         state.set_backtest_request("FULL_SCAN_RESUME")
-        return go.Figure(layout={'title': 'Resuming Scan...', 'template': 'plotly_dark'}), {"display": "flex", "height": "20px"}, "Resuming Scan..."
+        return load_style, "Resuming Scan..."
 
     elif "btn-ai-research" in trig_id:
         # Trigger AI Research
         state.set_backtest_request("AI_RESEARCH_START")
-        return go.Figure(layout={'title': 'AI Research Initiated...', 'template': 'plotly_dark'}), {"display": "flex", "height": "20px"}, "Starting AI Research..."
+        return load_style, "Starting AI Research..."
 
-    return no_update, no_update, no_update
+    elif "btn-ai-resume" in trig_id:
+        # Trigger Resume AI Research
+        state.set_backtest_request("AI_RESEARCH_RESUME")
+        return load_style, "Resuming AI Research..."
+
+    return no_update, no_update
 
 @app.callback(
     Output("scan-progress", "value"),
@@ -260,56 +267,6 @@ def update_scan_progress_bar(n):
     text = f"Scanning {symbol}... ({current}/{total})"
     return percent, label, text, {"display": "flex", "height": "20px"}
 
-@app.callback(
-    Output("bt-chart", "figure", allow_duplicate=True),
-    Input("interval-fast", "n_intervals"),
-    prevent_initial_call=True
-)
-def check_backtest_result(n):
-    res = state.get_backtest_result()
-    if res is not None:
-        # Build DataFrame
-        if isinstance(res, list):
-            df = pd.DataFrame(res)
-        elif isinstance(res, pd.DataFrame):
-            df = res
-        else:
-            if isinstance(res, dict) and 'Expectancy' in res:
-                # Single result result
-                df = pd.DataFrame([res])
-            else:
-                return no_update
-
-        if df.empty:
-             return go.Figure(layout={'title': 'No Data', 'template': 'plotly_dark'})
-
-        # Prepare for Bar Chart
-        # Normalize columns if missing (backward compatibility)
-        if 'rsi_period' in df.columns: df.rename(columns={'rsi_period': 'RSI'}, inplace=True)
-        if 'ema_period' in df.columns: df.rename(columns={'ema_period': 'EMA'}, inplace=True)
-
-        # X-axis Label
-        df['Label'] = df.apply(lambda row: f"{row.get('strategy_type', 'UNK')}: Dur {row.get('optimal_duration', 3)}m", axis=1)
-
-        # Bar Chart (Expectancy)
-        # If Expectancy exists, use it. Else fall back to WinRate
-        y_col = 'Expectancy' if 'Expectancy' in df.columns else 'WinRate'
-        title = "WFA Results: Expectancy ($ per trade)" if 'Expectancy' in df.columns else "Backtest Results (Win Rate %)"
-
-        fig = px.bar(df, x='Label', y=y_col,
-                     text=y_col,
-                     title=title,
-                     template="plotly_dark")
-
-        if y_col == 'Expectancy':
-             fig.update_traces(texttemplate='$%{text:.2f}', textposition='outside')
-             fig.update_layout(yaxis_title="Expectancy ($)")
-        else:
-             fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-             fig.update_layout(yaxis_range=[0, 100])
-
-        return fig
-    return no_update
 
 # Pagination Callback
 @app.callback(
