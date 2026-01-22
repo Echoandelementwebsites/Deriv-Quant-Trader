@@ -117,7 +117,9 @@ class SignalGenerator:
              strat_name = f"{symbol}_ai" # Legacy fallback
 
         try:
-            module_path = f"deriv_quant_py/strategies/generated/{strat_name}.py"
+            # Use absolute path to ensure robustness
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            module_path = os.path.join(base_dir, "strategies", "generated", f"{strat_name}.py")
 
             # Check if file exists
             if not os.path.exists(module_path):

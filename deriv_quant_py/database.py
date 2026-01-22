@@ -48,6 +48,17 @@ class StrategyParams(Base):
     kelly = Column(Float, default=0.0)
     max_drawdown = Column(Float, default=0.0)
 
+class BacktestResult(Base):
+    __tablename__ = "backtest_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, index=True)
+    strategy_type = Column(String, index=True)
+    win_rate = Column(Float)
+    expectancy = Column(Float)
+    signal_count = Column(Integer)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
 def init_db(db_url):
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)

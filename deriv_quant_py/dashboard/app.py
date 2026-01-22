@@ -13,6 +13,7 @@ import plotly.express as px
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 import json
+from datetime import datetime, timedelta
 
 # Initialize DB connection for the frontend
 SessionLocal = init_db(Config.DB_PATH)
@@ -112,7 +113,30 @@ def backtest_layout():
 
         dcc.Loading(
             html.Div([
-                # Obsolete chart removed
+                # Heatmap Section
+                html.H4("Strategy Performance Heatmap (Mean Expectancy)"),
+                html.P("Showing average performance over the last 7 days", className="text-muted"),
+                dcc.Loading(dash_table.DataTable(
+                    id='heatmap-table',
+                    style_header={
+                        'backgroundColor': 'rgb(30, 30, 30)',
+                        'color': 'white',
+                        'fontWeight': 'bold'
+                    },
+                    style_data={
+                        'backgroundColor': 'rgb(50, 50, 50)',
+                        'color': 'white'
+                    },
+                    style_data_conditional=[
+                        # Gradient styling for Expectancy
+                         {
+                            'if': {'filter_query': '{expectancy} > 0.5', 'column_id': 'expectancy'}, # Simple high check
+                            'backgroundColor': '#28a745', 'color': 'white'
+                        }
+                    ],
+                    style_cell={'textAlign': 'center', 'minWidth': '80px', 'width': '80px', 'maxWidth': '80px'},
+                    fixed_columns={'headers': True, 'data': 1}
+                )),
                 html.Hr(),
                 html.H4("Global Portfolio Overview"),
 
@@ -179,6 +203,41 @@ def backtest_layout():
     ])
 
 # Callbacks for Backtest
+
+@app.callback(
+    Output('heatmap-table', 'data'),
+    Output('heatmap-table', 'columns'),
+    Input('interval-slow', 'n_intervals')
+)
+def update_heatmap(n):
+    try:
+        with SessionLocal() as session:
+            # Fetch results from Last 7 Days to keep heatmap "Fresh"
+            week_ago = datetime.utcnow() - timedelta(days=7)
+            query = text("SELECT * FROM backtest_results WHERE timestamp > :week_ago")
+            df = pd.read_sql(query, session.bind, params={"week_ago": week_ago})
+
+        if df.empty: return [], []
+
+        # Pivot: Index=Symbol, Columns=Strategy, Values=Expectancy
+        # Aggregation: MEAN (Average Expectancy over all test windows)
+        pivot = df.pivot_table(index='symbol', columns='strategy_type', values='expectancy', aggfunc='mean')
+
+        # Sort Columns by Best Overall Strategy
+        col_order = pivot.mean().sort_values(ascending=False).index
+        pivot = pivot[col_order]
+
+        # Sort Rows by Best Overall Asset
+        pivot['Total_EV'] = pivot.sum(axis=1)
+        pivot = pivot.sort_values('Total_EV', ascending=False).drop(columns='Total_EV')
+
+        pivot = pivot.reset_index()
+        columns = [{"name": str(i), "id": str(i), "type": "numeric", "format": Format(precision=2)} for i in pivot.columns]
+
+        return pivot.to_dict('records'), columns
+    except Exception as e:
+        print(f"Error updating heatmap: {e}")
+        return [], []
 
 @app.callback(
     Output("bt-symbol", "options"),

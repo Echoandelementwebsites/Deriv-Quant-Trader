@@ -74,12 +74,35 @@ class AIResearcher:
         """
 
         user_prompt = f"""
-        ### ASSET DNA: {symbol}
-        - Regime: {dna_profile['regime']} (Hurst={dna_profile['hurst']:.2f})
-        - Noise: {dna_profile['noise_index']:.2f}
-        - Volatility: {dna_profile['volatility']:.5f}
+        ### DEEP MARKET VISION: {symbol}
 
-        Write the strategy module. OUTPUT ONLY RAW PYTHON CODE.
+        1. **The Natural Heartbeat (Dominant Cycle):** {dna_profile['dominant_cycle']} Bars
+           - *CRITICAL INSTRUCTION:* Do NOT use hardcoded lengths like 14.
+           - Use `length={dna_profile['dominant_cycle']}` for RSI, ADX, ATR, etc.
+           - This aligns your strategy with the asset's actual frequency.
+
+        2. **Raw Price Action (The Tape):**
+           (Last 15 candles, normalized to basis points. 'Doji' means indecision.)
+           ---------------------------------------------------
+           {dna_profile['price_action_tape']}
+           ---------------------------------------------------
+           - *Task:* "Look" at this tape. Is momentum accelerating? Are candles getting smaller (compression) or larger (expansion)?
+
+        3. **Market Context:**
+           - Trend Strength (ADX): {dna_profile['trend_strength']:.1f}
+           - Regime: {dna_profile['regime']} (Hurst={dna_profile['hurst']:.2f})
+           - Noise: {dna_profile['noise_index']:.2f}
+
+        ### STRATEGY GENERATION TASK
+        Write the `strategy_logic(df)` function based on the **Raw Tape** and **Dominant Cycle**.
+
+        1. **Dynamic Parameters:** Use variables for lengths.
+           `cycle = {dna_profile['dominant_cycle']}`
+           `rsi = ta.rsi(df['close'], length=cycle)`
+
+        2. **Pattern Logic:** If you see "Doji" or compression in the tape, code a breakout logic (e.g., using BB Width). If you see strong "Green" expansion, code a trend follower.
+
+        3. **Output:** Raw Python Code only.
         """
 
         messages = [
@@ -247,8 +270,9 @@ async def run_research_session(client, backtester, researcher, resume=False):
                 logger.warning(f"Insufficient data for {symbol}. Skipping.")
                 continue
 
-            # B. DNA Analysis
-            dna = MarketPhysics.get_asset_dna(df)
+            # B. DNA Analysis (Deep Dive)
+            # Use perform_deep_analysis instead of get_asset_dna to get the cycle and tape
+            dna = MarketPhysics.perform_deep_analysis(df)
 
             # C. Generate Strategy
             success = researcher.generate_strategy(symbol, dna)

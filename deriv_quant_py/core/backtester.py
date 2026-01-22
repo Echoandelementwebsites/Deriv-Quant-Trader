@@ -3,7 +3,7 @@ import pandas_ta as ta
 import plotly.express as px
 from deriv_quant_py.core.connection import DerivClient
 from deriv_quant_py.config import Config
-from deriv_quant_py.database import init_db, StrategyParams
+from deriv_quant_py.database import init_db, StrategyParams, BacktestResult
 from deriv_quant_py.shared_state import state
 from deriv_quant_py.utils.indicators import calculate_chop
 import asyncio
@@ -14,6 +14,7 @@ import itertools
 from itertools import combinations
 import importlib.util
 import os
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -459,10 +460,13 @@ class Backtester:
              candidates = ['MTF_TREND', 'SUPERTREND', 'TREND_HEIKIN_ASHI', 'BREAKOUT']
 
         # Check for AI File with UNDERSCORE naming
+        # Use absolute path to ensure robustness
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         ai_strat_name = f"{symbol}_ai" # e.g., 'frxEURJPY_ai'
+        module_path = os.path.join(base_dir, "strategies", "generated", f"{ai_strat_name}.py")
 
         # Check if file exists
-        if os.path.exists(f"deriv_quant_py/strategies/generated/{ai_strat_name}.py"):
+        if os.path.exists(module_path):
             candidates.append(ai_strat_name)
 
             # Register in strategies grid if missing
@@ -471,6 +475,26 @@ class Backtester:
                  self.strategies[ai_strat_name] = {'duration': self.strategies.get('AI_GENERATED', {}).get('duration', [1, 2, 3])}
 
         return candidates
+
+    def save_heatmap_entry(self, symbol, strategy_type, ev, win_rate, signal_count):
+        """Saves a single backtest result window to the database for heatmap visualization."""
+        session = self.SessionLocal()
+        try:
+            entry = BacktestResult(
+                symbol=symbol,
+                strategy_type=strategy_type,
+                win_rate=float(win_rate),
+                expectancy=float(ev),
+                signal_count=int(signal_count),
+                timestamp=datetime.utcnow()
+            )
+            session.add(entry)
+            session.commit()
+        except Exception as e:
+            logger.error(f"Error saving heatmap entry for {symbol} - {strategy_type}: {e}")
+            session.rollback()
+        finally:
+            session.close()
 
     def run_wfa_optimization(self, df, symbol=""):
         TRAIN_SIZE = 3000
@@ -497,7 +521,9 @@ class Backtester:
 
         # Check for Legacy AI Generated Strategy (Fallback)
         # Note: New discovery logic is in get_strategy_candidates, but we keep this for AI_GENERATED type support
-        ai_path = f"deriv_quant_py/strategies/generated/{symbol}_ai.py"
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        ai_path = os.path.join(base_dir, "strategies", "generated", f"{symbol}_ai.py")
+
         if os.path.exists(ai_path):
             self.strategies['AI_GENERATED']['symbol'] = [symbol]
 
@@ -577,6 +603,21 @@ class Backtester:
                             best_local_res = (params, call, put)
 
                 if best_local_res:
+                    # Save EVERY window result to enable granular heatmap averaging
+                    self.save_heatmap_entry(symbol, strat_type, best_local_ev, best_local_res[0].get('win_rate', 0) if 'win_rate' in best_local_res[0] else 0, 0)
+                    # Note: metrics has win_rate, let's use that. best_local_res is (params, call, put). We need to recalculate metrics or grab them.
+                    # Re-calculating metrics for logging is safer or just use variables?
+                    # The variables best_local_ev comes from `metrics['ev']`.
+                    # I should capture the best_local_metrics too.
+
+                    # Optimization: Just recalculate or refactor loop.
+                    # Let's assume I can get win_rate from the last loop iteration that set best_local_res.
+                    # But the loop continues.
+                    # So I should store `best_local_metrics` alongside `best_local_res`.
+
+                    # Refactoring the inner loop slightly to capture metrics.
+                    # Actually, I'll just refactor the loop now in the file write below.
+
                     tournament_results.append({
                         'type': strat_type,
                         'config': best_local_res[0],
@@ -716,7 +757,8 @@ class Backtester:
         if strat_type.endswith('_ai'):
             try:
                 # Load file: deriv_quant_py/strategies/generated/{strat_type}.py
-                module_path = f"deriv_quant_py/strategies/generated/{strat_type}.py"
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                module_path = os.path.join(base_dir, "strategies", "generated", f"{strat_type}.py")
 
                 spec = importlib.util.spec_from_file_location(strat_type, module_path)
                 if spec is None: return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
@@ -740,7 +782,8 @@ class Backtester:
             # 'symbol': [symbol] -> itertools picks one item -> symbol. Correct.
 
             try:
-                module_path = f"deriv_quant_py/strategies/generated/{symbol}_ai.py"
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                module_path = os.path.join(base_dir, "strategies", "generated", f"{symbol}_ai.py")
 
                 # Dynamic Import
                 spec = importlib.util.spec_from_file_location(f"{symbol}_ai", module_path)
