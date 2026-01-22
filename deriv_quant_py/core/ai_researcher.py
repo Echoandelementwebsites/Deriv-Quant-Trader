@@ -4,7 +4,8 @@ import logging
 import re
 import pandas as pd
 import numpy as np
-import pandas_ta as ta  # Required for Validation Scope
+import pandas_ta as ta
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -17,68 +18,84 @@ class AIResearcher:
         )
 
     def generate_strategy(self, symbol, dna_profile, max_retries=3):
-        # 1. THE ENHANCED SYSTEM PROMPT (With Docs & One-Shot Example)
+        # ---------------------------------------------------------
+        # 1. ARCHITECTURE PROMPT (The "Team" Logic)
+        # ---------------------------------------------------------
         system_prompt = """
-        You are a Senior Quantitative Developer. Write a Python function `strategy_logic(df)`.
+        You are a Senior Quantitative Architect (Python). 
+        Your task is to write a robust, error-free strategy function `strategy_logic(df)` for a high-frequency trading bot.
 
-        ### REFERENCE DOCUMENTATION
-        - Pandas TA Lib: https://github.com/twopirllc/pandas-ta
-        - Pandas Docs: https://pandas.pydata.org/docs/
+        ### CRITICAL ARCHITECTURE RULES (DO NOT IGNORE)
+        1. **NO APPEND:** DO NOT use `append=True`. DO NOT modify the input `df`.
+        2. **FUNCTIONAL STYLE:** Assign indicator results to variables.
+           - WRONG: `df.ta.rsi(append=True)` then accessing `df['RSI_14']`
+           - CORRECT: `rsi_series = ta.rsi(df['close'], length=14)`
+        3. **SAFE COLUMN ACCESS:** `pandas_ta` returns DataFrames for multi-line indicators (like BBands). 
+           - **NEVER guess column names** like 'BBL_20_2.0'. They are dynamic and cause crashes.
+           - **USE .iloc[]:** Access columns by index.
+             - BBANDS: [0]=Lower, [1]=Mid, [2]=Upper
+             - MACD:   [0]=MACD, [1]=Histogram, [2]=Signal
+             - STOCH:  [0]=K, [1]=D
 
-        ### LIBRARY CONTEXT
-        - Library: `pandas_ta` (standard naming convention).
-        - Input: `df` (columns: open, high, low, close).
-        - Output: Tuple `(call_signal, put_signal)` where both are `pd.Series` of booleans.
+        ### DATA STRUCTURE
+        - Input: `df` (pandas DataFrame) with columns: 'open', 'high', 'low', 'close'.
+        - Output: Tuple `(call_signal, put_signal)` -> both `pd.Series` of booleans.
 
-        ### CRITICAL SYNTAX RULES
-        1. **APPEND IS MANDATORY:** Always use `append=True` for indicators.
-           - Correct: `df.ta.bbands(length=20, std=2, append=True)`
-           - Wrong: `bb = df.ta.bbands(...)`
-        2. **COLUMN NAMES:** Pandas TA generates specific names. You must use them.
-           - BBANDS(20, 2) -> `BBL_20_2.0`, `BBM_20_2.0`, `BBU_20_2.0`
-           - RSI(14) -> `RSI_14`
-           - SUPERTREND(7, 3) -> `SUPERT_7_3.0`
-        3. **SAFETY:** Use `.fillna(False)` on final signals. Avoid `inf`.
-
-        ### GOLDEN EXAMPLE (FOLLOW THIS STRUCTURE)
+        ### TEMPLATE (FOLLOW STYLES EXACTLY)
         def strategy_logic(df):
-            # 1. Calculate Indicators (append=True)
-            df.ta.ema(length=50, append=True)  # Creates 'EMA_50'
-            df.ta.rsi(length=14, append=True)  # Creates 'RSI_14'
+            # 1. Extract Series for readability
+            close = df['close']
+            high = df['high']
+            low = df['low']
 
-            # 2. Define Logic
-            # Trend Condition: Close > EMA
-            trend_up = df['close'] > df['EMA_50']
+            # 2. Indicators (Functional Assignment)
+            # RSI (Returns Series)
+            rsi = ta.rsi(close, length=14)
 
-            # Entry Condition: RSI < 30 (Oversold)
-            entry_long = df['RSI_14'] < 30
+            # BBANDS (Returns DataFrame: Lower, Mid, Upper)
+            bb_df = ta.bbands(close, length=20, std=2.0)
+            # SAFE EXTRACT: Use iloc to avoid Name Errors
+            bb_lower = bb_df.iloc[:, 0] 
+            bb_upper = bb_df.iloc[:, 2]
 
-            # 3. Generate Signals
-            call_signal = trend_up & entry_long
-            put_signal = (~trend_up) & (df['RSI_14'] > 70)
+            # EMA (Returns Series)
+            ema_trend = ta.ema(close, length=200)
 
-            # 4. Return safely
-            return call_signal.fillna(False), put_signal.fillna(False)
+            # 3. Logic & Cleaning
+            # Important: Fill NaNs to prevent false signals at start of data
+            rsi = rsi.fillna(50)
+            ema_trend = ema_trend.fillna(close) 
+
+            # 4. Conditions
+            # Example: Reversion Strategy
+            long_cond = (close < bb_lower) & (rsi < 30) & (close > ema_trend)
+            short_cond = (close > bb_upper) & (rsi > 70) & (close < ema_trend)
+
+            # 5. Return (Series, Series)
+            return long_cond, short_cond
         """
 
-        # 2. DETAILED CONTEXT PROMPT
+        # ---------------------------------------------------------
+        # 2. STRATEGY CONTEXT (The "Quant" Logic)
+        # ---------------------------------------------------------
         user_prompt = f"""
-        ### ASSET DNA REPORT: {symbol}
-        1. **Regime:** {dna_profile['regime']} (Hurst={dna_profile['hurst']:.2f})
-           - If TRENDING (Hurst > 0.5): Prioritize breakouts (Donchian, Supertrend).
-           - If REVERSION (Hurst < 0.5): Prioritize oscillators (RSI, Stoch, BB).
+        ### ASSET REPORT: {symbol}
+        - **Market Regime:** {dna_profile['regime']} (Hurst={dna_profile['hurst']:.2f})
+        - **Noise Level:** {dna_profile['noise_index']:.2f} (0=Clean, 1=Noisy)
+        - **Volatility:** {dna_profile['volatility']:.5f}
 
-        2. **Noise Level:** {dna_profile['noise_index']:.2f} (0.0=Smooth, 1.0=Chaotic)
-           - Current Level: {"HIGH" if dna_profile['noise_index'] > 0.6 else "LOW"}
-           - Instruction: If High Noise, use longer lookback periods or smoothing (EMA/SMA) to filter fakeouts.
+        ### STRATEGY OBJECTIVES
+        1. **Regime Alignment:**
+           - If TRENDING (Hurst > 0.5): Use Trend Following (EMA, MACD, Supertrend).
+           - If MEAN_REVERSION (Hurst < 0.5): Use Oscillators (RSI, Stoch, BB).
+        2. **Noise Handling:**
+           - The Noise Index is {dna_profile['noise_index']:.2f}. 
+           - {"Use longer lookbacks/smoothing (EMA) to filter noise." if dna_profile['noise_index'] > 0.6 else "Standard settings are fine."}
 
-        3. **Volatility:** {dna_profile['volatility']:.5f}
-           - Instruction: Use this to tune thresholds. Higher volatility requires wider stop-losses or bands.
-
-        ### TASK
-        Write the `strategy_logic` function for this asset. 
-        Focus on exploiting the identified Regime while mitigating the Noise.
-        OUTPUT ONLY RAW PYTHON CODE. NO MARKDOWN.
+        ### OUTPUT REQUIREMENT
+        - Output ONLY raw Python code wrapped in ```python ... ``` blocks.
+        - No markdown text outside the code block.
+        - The function MUST be named `strategy_logic`.
         """
 
         messages = [
@@ -86,82 +103,91 @@ class AIResearcher:
             {"role": "user", "content": user_prompt}
         ]
 
+        # ---------------------------------------------------------
+        # 3. GENERATION & REPAIR LOOP
+        # ---------------------------------------------------------
         for attempt in range(max_retries):
             try:
-                logger.info(f"AI Generation Attempt {attempt + 1}/{max_retries} for {symbol}...")
+                logger.info(f"AI Strategy Gen: {symbol} (Attempt {attempt + 1})")
 
                 response = self.client.chat.completions.create(
-                    model="deepseek-reasoner",  # DeepSeek-V3.2 Thinking Mode
+                    model="deepseek-reasoner",  # Leverages DeepSeek's CoT
                     messages=messages,
-                    temperature=0.0  # Strict determinism for coding
+                    temperature=0.1  # Low temp for code precision
                 )
 
                 raw_code = response.choices[0].message.content
                 clean_code = self._sanitize_code(raw_code)
 
-                # 3. VALIDATION LAYER
+                # Validate
                 is_valid, error_msg = self._validate_code(clean_code)
 
                 if is_valid:
                     self._save_to_file(symbol, clean_code)
-                    logger.info(f"Generated & Validated strategy for {symbol}")
+                    logger.info(f"SUCCESS: Strategy for {symbol} compiled and verified.")
                     return True
                 else:
-                    logger.warning(f"Attempt {attempt + 1} Failed: {error_msg}")
-                    # Feed specific error back to AI
+                    logger.warning(f"VALIDATION FAILED ({symbol}): {error_msg}")
+                    # FEEDBACK LOOP: Show the AI exactly what went wrong
                     messages.append({"role": "assistant", "content": raw_code})
                     messages.append({
                         "role": "user",
-                        "content": f"VALIDATION ERROR: {error_msg}\n"
-                                   f"Review the 'CRITICAL SYNTAX RULES'. Did you use the correct column name? "
-                                   f"Did you use `append=True`? Fix the code."
+                        "content": f"CRITICAL ERROR in your code: {error_msg}\n"
+                                   f"REMINDER: Do NOT access columns by name (like ['BBL...']). "
+                                   f"Use .iloc[:, index] to access indicator outputs safely. Rewrite the code."
                     })
 
             except Exception as e:
-                logger.error(f"AI Research Error {symbol}: {e}")
+                logger.error(f"DeepSeek API Error: {e}")
                 return False
 
-        logger.error(f"Failed to generate valid strategy for {symbol} after {max_retries} attempts.")
+        logger.error(f"FAILED to generate strategy for {symbol} after retries.")
         return False
 
     def _validate_code(self, code_str):
         """
-        Sandboxes the code to ensure it runs without crashing and returns the correct format.
+        Executes the code in a sandbox with realistic random data to catch runtime errors.
         """
         try:
-            # 1. Create a safe local execution scope
             local_scope = {}
+            # Pre-import standard libs
             exec("import pandas as pd\nimport pandas_ta as ta\nimport numpy as np", {}, local_scope)
-
-            # 2. Compile the AI code
             exec(code_str, {}, local_scope)
 
             if 'strategy_logic' not in local_scope:
-                return False, "Function 'strategy_logic' not defined."
+                return False, "Function 'strategy_logic' not found."
 
-            # 3. Create Dummy Data (Random Walk)
+            # Generate realistic test data (OHLC)
+            size = 200
             np.random.seed(42)
-            prices = np.random.normal(100, 1, 100).cumsum()
-            df = pd.DataFrame({
-                'open': prices,
-                'high': prices + 1,
-                'low': prices - 1,
-                'close': prices
-            })
+            close = np.random.normal(100, 2, size).cumsum() + 1000
+            high = close + np.random.random(size)
+            low = close - np.random.random(size)
+            open_ = close + np.random.random(size) - 0.5
 
-            # 4. Dry Run
+            df = pd.DataFrame({'open': open_, 'high': high, 'low': low, 'close': close})
+
+            # RUN THE STRATEGY
             call, put = local_scope['strategy_logic'](df.copy())
 
-            # 5. Check Outputs
+            # Type Checks
             if not isinstance(call, pd.Series) or not isinstance(put, pd.Series):
-                return False, f"Return types invalid. Got {type(call)}, {type(put)}"
+                return False, f"Must return (pd.Series, pd.Series). Got ({type(call)}, {type(put)})"
 
-            if len(call) != len(df):
-                return False, "Output Series length mismatch."
+            # Length Checks
+            if len(call) != size:
+                return False, f"Output length mismatch. Input={size}, Output={len(call)}"
+
+            # Value Checks (Ensure no NaNs or Infs leaked)
+            if call.isnull().any() or put.isnull().any():
+                return False, "Output contains NaNs. Did you use .fillna(False)?"
 
             return True, "Passed"
 
         except Exception as e:
+            # Capture the full traceback for the logs, return the simplified error for the AI
+            err_details = traceback.format_exc()
+            logger.debug(err_details)
             return False, f"Runtime Error: {str(e)}"
 
     def _sanitize_code(self, code):
@@ -169,10 +195,10 @@ class AIResearcher:
         match = re.search(pattern, code, re.DOTALL)
         if match:
             return match.group(1).strip()
-        return code.replace("```", "").strip()
+        # Fallback: remove markdown backticks if pattern fails
+        return code.replace("```python", "").replace("```", "").strip()
 
     def _save_to_file(self, symbol, code):
-        # Enforce the naming convention: frxEURUSD_ai.py
         path = f"deriv_quant_py/strategies/generated/{symbol}_ai.py"
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
