@@ -118,6 +118,10 @@ def backtest_layout():
                 html.P("Showing average performance over the last 7 days", className="text-muted"),
                 dcc.Loading(dash_table.DataTable(
                     id='heatmap-table',
+                    page_action='native',
+                    page_current=0,
+                    page_size=15,
+                    style_table={'overflowX': 'auto'},
                     style_header={
                         'backgroundColor': 'rgb(30, 30, 30)',
                         'color': 'white',
@@ -134,7 +138,7 @@ def backtest_layout():
                             'backgroundColor': '#28a745', 'color': 'white'
                         }
                     ],
-                    style_cell={'textAlign': 'center', 'minWidth': '80px', 'width': '80px', 'maxWidth': '80px'},
+                    style_cell={'textAlign': 'center', 'minWidth': '120px'},
                     fixed_columns={'headers': True, 'data': 1}
                 )),
                 html.Hr(),
