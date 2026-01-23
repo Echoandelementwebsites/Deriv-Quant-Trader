@@ -62,11 +62,38 @@ class MarketPhysics:
         return "\n".join(tape)
 
     @staticmethod
+    def get_market_structure(df: pd.DataFrame, window=50) -> dict:
+        """
+        Identifies Support, Resistance, and Range position.
+        """
+        recent = df.iloc[-window:]
+        resistance = recent['high'].max()
+        support = recent['low'].min()
+        current = df['close'].iloc[-1]
+
+        # Position in Range (0.0 to 1.0)
+        range_pos = (current - support) / (resistance - support) if resistance != support else 0.5
+
+        # Structure Tag
+        if range_pos > 0.9: structure = "Testing Resistance"
+        elif range_pos < 0.1: structure = "Testing Support"
+        elif 0.4 < range_pos < 0.6: structure = "Equilibrium/Mid-Range"
+        else: structure = "In Range"
+
+        return {
+            "resistance_price": resistance,
+            "support_price": support,
+            "range_position": range_pos,
+            "structure_tag": structure
+        }
+
+    @staticmethod
     def perform_deep_analysis(df: pd.DataFrame) -> dict:
         """Deep Dive with Adaptive Metrics."""
         dna = MarketPhysics.get_asset_dna(df)
         cycle = MarketPhysics.get_dominant_cycle(df)
         tape = MarketPhysics.get_price_action_tape(df)
+        structure = MarketPhysics.get_market_structure(df)
 
         # Calculate Trend Strength using the DYNAMIC cycle length
         adx = ta.adx(df['high'], df['low'], df['close'], length=cycle)
@@ -76,5 +103,6 @@ class MarketPhysics:
             **dna,
             "dominant_cycle": cycle,
             "price_action_tape": tape,
-            "trend_strength": adx_val
+            "trend_strength": adx_val,
+            "market_structure": structure
         }

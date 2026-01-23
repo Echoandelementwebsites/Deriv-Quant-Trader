@@ -10,6 +10,7 @@ import asyncio
 from deriv_quant_py.core.market_physics import MarketPhysics
 from deriv_quant_py.shared_state import state
 from deriv_quant_py.core.scanner import MarketScanner
+from deriv_quant_py.core.metrics import MetricsEngine
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +22,19 @@ class AIResearcher:
             base_url="https://api.deepseek.com"
         )
 
-    def generate_strategy(self, symbol, dna_profile, max_retries=3):
+    def generate_strategy(self, symbol, dna_profile, df, max_retries=3):
         # 1. SYSTEM PROMPT: Enforce Imports and Functional Logic
         system_prompt = """
-        You are a Senior Quantitative Python Developer.
-        Task: Write a complete Python module for a trading strategy.
+        You are a Senior Quantitative Researcher.
+        Task: Write a complete Python module for a profitable trading strategy.
+
+        ### CRITICAL GOAL: PROFITABILITY
+        Your code will be immediately backtested against recent market data.
+        If it loses money (Expectancy <= 0), you will be REJECTED.
+        You must write defensive, high-probability logic.
+        - Avoid false signals in chop.
+        - Confirm trends with volume or momentum.
+        - Use strict filters (e.g., ADX > 25).
 
         ### REQUIREMENTS
         1. **IMPORTS:** You MUST include standard imports at the top:
@@ -77,38 +86,35 @@ class AIResearcher:
         ### DEEP MARKET VISION: {symbol}
 
         1. **The Natural Heartbeat (Dominant Cycle):** {dna_profile['dominant_cycle']} Bars
-           - *CRITICAL INSTRUCTION:* Do NOT use hardcoded lengths like 14.
-           - Use `length={dna_profile['dominant_cycle']}` for RSI, ADX, ATR, etc.
-           - This aligns your strategy with the asset's actual frequency.
+           - Use `length={dna_profile['dominant_cycle']}` for indicators to align with the market.
 
-        2. **Raw Price Action (The Tape):**
-           (Last 15 candles, normalized to basis points. 'Doji' means indecision.)
+        2. **Market Structure:**
+           - Status: {dna_profile['market_structure']['structure_tag']}
+           - Position: {dna_profile['market_structure']['range_position']:.2f} (0=Support, 1=Resist)
+
+        3. **Raw Price Action (The Tape):**
            ---------------------------------------------------
            {dna_profile['price_action_tape']}
            ---------------------------------------------------
-           - *Task:* "Look" at this tape. Is momentum accelerating? Are candles getting smaller (compression) or larger (expansion)?
 
-        3. **Market Context:**
+        4. **Market Context:**
            - Trend Strength (ADX): {dna_profile['trend_strength']:.1f}
            - Regime: {dna_profile['regime']} (Hurst={dna_profile['hurst']:.2f})
            - Noise: {dna_profile['noise_index']:.2f}
 
         ### STRATEGY GENERATION TASK
-        Write the `strategy_logic(df)` function based on the **Raw Tape** and **Dominant Cycle**.
-
-        1. **Dynamic Parameters:** Use variables for lengths.
-           `cycle = {dna_profile['dominant_cycle']}`
-           `rsi = ta.rsi(df['close'], length=cycle)`
-
-        2. **Pattern Logic:** If you see "Doji" or compression in the tape, code a breakout logic (e.g., using BB Width). If you see strong "Green" expansion, code a trend follower.
-
-        3. **Output:** Raw Python Code only.
+        Write the `strategy_logic(df)` function.
+        - If Structure is "Testing Resistance", look for Reversals (Puts) or Breakouts (Calls) based on momentum.
+        - If Noise is High (>0.6), use strict volatility filters.
         """
 
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
+
+        # Use recent history for testing (approx 3.5 days)
+        test_df = df.iloc[-5000:].copy() if len(df) > 5000 else df.copy()
 
         for attempt in range(max_retries):
             try:
@@ -123,22 +129,61 @@ class AIResearcher:
                 raw_code = response.choices[0].message.content
                 clean_code = self._sanitize_code(raw_code)
 
-                # Validate
-                is_valid, error_msg = self._validate_code(clean_code)
+                # 1. Syntax & Dummy Validation
+                is_valid, scope, error_msg = self._validate_code(clean_code)
 
-                if is_valid:
-                    self._save_to_file(symbol, clean_code)
-                    logger.info(f"SUCCESS: Strategy for {symbol} created.")
-                    return True
-                else:
-                    logger.warning(f"Validation Failed ({symbol}): {error_msg}")
-                    # Feedback loop
+                if not is_valid:
+                    logger.warning(f"Syntax/Runtime Error ({symbol}): {error_msg}")
                     messages.append({"role": "assistant", "content": raw_code})
                     messages.append({
                         "role": "user",
-                        "content": f"FIX CODE ERROR: {error_msg}\n"
-                                   f"Ensure you imported pandas_ta as ta. "
-                                   f"Ensure you return (call, put) series."
+                        "content": f"FIX CODE ERROR: {error_msg}\nCheck imports and return types."
+                    })
+                    continue
+
+                # 2. Profitability Test (The "Scientist" Check)
+                try:
+                    call, put = scope['strategy_logic'](test_df)
+                except Exception as e:
+                    logger.warning(f"Runtime Error on Real Data ({symbol}): {e}")
+                    messages.append({"role": "assistant", "content": raw_code})
+                    messages.append({
+                        "role": "user",
+                        "content": f"Runtime Error during Backtest: {str(e)}"
+                    })
+                    continue
+
+                # 3. Grade
+                best_ev = -10.0
+                best_stats = None
+                best_dur = 1
+
+                for duration in [1, 2, 3, 5]:
+                    metrics = MetricsEngine.calculate_performance(test_df, call, put, duration, symbol)
+                    if metrics and metrics['ev'] > best_ev:
+                        best_ev = metrics['ev']
+                        best_stats = metrics
+                        best_dur = duration
+
+                # 4. Decision
+                if best_ev > 0.05:
+                    logger.info(f"SUCCESS: {symbol} Passed. EV={best_ev:.2f}, WinRate={best_stats['win_rate']:.1f}%")
+                    self._save_to_file(symbol, clean_code)
+                    return True
+                else:
+                    # Construct Feedback
+                    stats_str = f"EV: {best_ev:.2f}"
+                    if best_stats:
+                        stats_str += f", WR: {best_stats['win_rate']:.1f}%, Trades: {best_stats['signals']}"
+
+                    logger.warning(f"Strategy Failed Profitability ({symbol}): {stats_str}")
+
+                    messages.append({"role": "assistant", "content": raw_code})
+                    messages.append({
+                        "role": "user",
+                        "content": f"Strategy FAILED Backtest. Result: {stats_str}. \n"
+                                   f"It is NOT profitable. Analyze the failure. Is it trading too much in chop? \n"
+                                   f"Refine the logic to be more defensive. Add stronger filters."
                     })
 
             except Exception as e:
@@ -159,10 +204,9 @@ class AIResearcher:
             exec(code_str, scope)
 
             if 'strategy_logic' not in scope:
-                return False, "Function 'strategy_logic' not found."
+                return False, None, "Function 'strategy_logic' not found."
 
-            # 3. Test Run
-            # Create dummy OHLC
+            # 3. Test Run (Dummy Data)
             size = 100
             dates = pd.date_range(start='2024-01-01', periods=size, freq='1min')
             close = np.random.normal(100, 1, size).cumsum() + 1000
@@ -179,17 +223,17 @@ class AIResearcher:
 
             # 4. Checks
             if not isinstance(call, pd.Series) or not isinstance(put, pd.Series):
-                return False, f"Return must be (pd.Series, pd.Series). Got {type(call)}, {type(put)}"
+                return False, None, f"Return must be (pd.Series, pd.Series). Got {type(call)}, {type(put)}"
 
             if len(call) != len(df):
-                return False, "Output length mismatch."
+                return False, None, "Output length mismatch."
 
-            return True, "Passed"
+            return True, scope, "Passed"
 
         except Exception as e:
             # Return simple error to AI, log full trace
             logger.debug(traceback.format_exc())
-            return False, f"Runtime Error: {str(e)}"
+            return False, None, f"Runtime Error: {str(e)}"
 
     def _sanitize_code(self, code):
         pattern = r"```python(.*?)```"
@@ -274,8 +318,8 @@ async def run_research_session(client, backtester, researcher, resume=False):
             # Use perform_deep_analysis instead of get_asset_dna to get the cycle and tape
             dna = MarketPhysics.perform_deep_analysis(df)
 
-            # C. Generate Strategy
-            success = researcher.generate_strategy(symbol, dna)
+            # C. Generate Strategy (Pass DF for Testing)
+            success = researcher.generate_strategy(symbol, dna, df)
             if success:
                 logger.info(f"SUCCESS: Generated strategy for {symbol}")
 
