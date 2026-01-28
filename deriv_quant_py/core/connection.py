@@ -21,6 +21,7 @@ class DerivClient:
 
         self._connected_event = asyncio.Event()
         self._reconnection_task: Optional[asyncio.Task] = None
+        self.last_msg_time = time.time()
 
     async def connect(self):
         """
@@ -42,6 +43,7 @@ class DerivClient:
                 async with websockets.connect(self.url) as ws:
                     self.ws = ws
                     self.is_connected = True
+                    self.last_msg_time = time.time() # Reset on new connection
                     logger.info("Connected to Deriv API.")
 
                     # Start Message Loop (CRITICAL: Must start before authorize)
@@ -49,6 +51,9 @@ class DerivClient:
 
                     # Start Ping Loop
                     ping_task = asyncio.create_task(self._ping_loop())
+
+                    # Start Heartbeat Monitor
+                    heartbeat_task = asyncio.create_task(self._monitor_heartbeat())
 
                     try:
                         # Authenticate
@@ -73,6 +78,7 @@ class DerivClient:
                         self.is_connected = False
                         self._connected_event.clear()
                         ping_task.cancel()
+                        heartbeat_task.cancel()
                         if not read_task.done():
                              read_task.cancel()
 
@@ -101,6 +107,22 @@ class DerivClient:
                 break
             except Exception as e:
                 logger.error(f"Ping error: {e}")
+                break
+
+    async def _monitor_heartbeat(self):
+        """Monitors for incoming messages. Force reconnect if dead."""
+        while self.is_connected:
+            try:
+                await asyncio.sleep(10)
+                if time.time() - self.last_msg_time > 30:
+                    logger.warning("Heartbeat Timeout! Last message > 30s ago. Reconnecting...")
+                    if self.ws:
+                        await self.ws.close()
+                    break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Heartbeat monitor error: {e}")
                 break
 
     async def authorize(self):
@@ -140,6 +162,7 @@ class DerivClient:
 
 
     async def _handle_message(self, message: str):
+        self.last_msg_time = time.time()
         try:
             data = json.loads(message)
         except json.JSONDecodeError as e:

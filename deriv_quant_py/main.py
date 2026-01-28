@@ -97,7 +97,8 @@ def run_backend():
                     df = await backtester.fetch_history_paginated(bt_req, months=1)
                     if not df.empty:
                         # Single WFA run returns a single dict (best config) or None
-                        best = backtester.run_wfa_optimization(df)
+                        # CRITICAL FIX: Await the async optimization task
+                        best = await backtester.run_wfa_optimization(df, symbol=bt_req)
                         if best:
                             # Frontend expects a list for the table/chart.
                             # We can wrap the single result in a list.
